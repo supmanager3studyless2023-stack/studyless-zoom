@@ -1,77 +1,76 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const CHUNK_SIZE = 20 * 1024 * 1024 // 20 MB
+const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY
 
-async function transcribeBlob(blob: Blob, filename: string): Promise<string> {
-  const groqForm = new FormData()
-  groqForm.append('model', 'whisper-large-v3-turbo')
-  groqForm.append('language', 'uk')
-  groqForm.append('response_format', 'text')
-  groqForm.append('file', blob, filename)
-
-  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+async function uploadAudio(audioBlob: Blob): Promise<string> {
+  const res = await fetch('https://api.assemblyai.com/v2/upload', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-    body: groqForm,
+    headers: {
+      authorization: ASSEMBLYAI_API_KEY!,
+      'content-type': 'application/octet-stream',
+    },
+    body: audioBlob,
   })
-
-  if (!res.ok) {
-    const err = await res.text()
-    console.error('Groq error:', err)
-    throw new Error('Transcription failed')
-  }
-
-  return await res.text()
+  if (!res.ok) throw new Error('Upload failed')
+  const data = await res.json()
+  return data.upload_url
 }
 
-async function transcribeLargeBlob(blob: Blob, filename: string): Promise<string> {
-  if (blob.size <= CHUNK_SIZE) {
-    return transcribeBlob(blob, filename)
+async function transcribeAudio(audioUrl: string): Promise<string> {
+  // Створюємо завдання на транскрипцію
+  const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+    method: 'POST',
+    headers: {
+      authorization: ASSEMBLYAI_API_KEY!,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      audio_url: audioUrl,
+      language_code: 'uk',
+    }),
+  })
+  if (!createRes.ok) throw new Error('Transcription request failed')
+  const { id } = await createRes.json()
+
+  // Чекаємо поки транскрипція завершиться
+  while (true) {
+    await new Promise(r => setTimeout(r, 3000)) // чекаємо 3 секунди
+
+    const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+      headers: { authorization: ASSEMBLYAI_API_KEY! },
+    })
+    const result = await pollRes.json()
+
+    if (result.status === 'completed') return result.text
+    if (result.status === 'error') throw new Error(result.error)
   }
-
-  const chunks: string[] = []
-  let offset = 0
-
-  while (offset < blob.size) {
-    const chunk = blob.slice(offset, offset + CHUNK_SIZE)
-    const text = await transcribeBlob(chunk, filename)
-    chunks.push(text)
-    offset += CHUNK_SIZE
-  }
-
-  return chunks.join(' ')
 }
 
 export async function POST(request: NextRequest) {
   const contentType = request.headers.get('content-type') || ''
 
-  let blob: Blob
-  let filename: string
+  let audioUrl: string
 
   if (contentType.includes('application/json')) {
-    // URL режим
+    // URL режим — передаємо напряму в AssemblyAI
     const { url } = await request.json()
     if (!url) return NextResponse.json({ error: 'No URL' }, { status: 400 })
-
-    const audioRes = await fetch(url)
-    if (!audioRes.ok) return NextResponse.json({ error: 'Cannot fetch audio' }, { status: 400 })
-
-    blob = await audioRes.blob()
-    filename = url.split('/').pop()?.split('?')[0] || 'audio.wav'
+    audioUrl = url
   } else {
-    // File режим
+    // File режим — спочатку завантажуємо файл
     const formData = await request.formData()
     const file = formData.get('file') as File
     if (!file) return NextResponse.json({ error: 'No file' }, { status: 400 })
 
-    blob = file
-    filename = file.name
+    const blob = new Blob([await file.arrayBuffer()], { type: file.type })
+    audioUrl = await uploadAudio(blob)
   }
 
   try {
-    const transcript = await transcribeLargeBlob(blob, filename)
+    const transcript = await transcribeAudio(audioUrl)
     return NextResponse.json({ transcript })
-  } catch {
+  } catch (err) {
+    console.error('AssemblyAI error:', err)
     return NextResponse.json({ error: 'Transcription failed' }, { status: 500 })
   }
 }
