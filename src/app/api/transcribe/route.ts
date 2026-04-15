@@ -23,10 +23,10 @@ async function transcribeAudio(audioUrl: string): Promise<string> {
       authorization: ASSEMBLYAI_API_KEY!,
       'content-type': 'application/json',
     },
-   body: JSON.stringify({
+body: JSON.stringify({
   audio_url: audioUrl,
   language_code: 'uk',
-  speech_model: 'universal-2',
+  speech_models: ['universal-2'],
 }),
   })
 
