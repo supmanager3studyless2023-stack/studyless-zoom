@@ -17,7 +17,6 @@ async function uploadAudio(audioBlob: Blob): Promise<string> {
 }
 
 async function transcribeAudio(audioUrl: string): Promise<string> {
-  // Створюємо завдання на транскрипцію
   const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
     headers: {
@@ -29,8 +28,13 @@ async function transcribeAudio(audioUrl: string): Promise<string> {
       language_code: 'uk',
     }),
   })
-  if (!createRes.ok) throw new Error('Transcription request failed')
-  const { id } = await createRes.json()
+
+  const createData = await createRes.json()
+  console.log('AssemblyAI create response:', JSON.stringify(createData))
+
+  if (!createRes.ok) throw new Error(`Transcription request failed: ${JSON.stringify(createData)}`)
+
+  const { id } = createData
 
   // Чекаємо поки транскрипція завершиться
   while (true) {
