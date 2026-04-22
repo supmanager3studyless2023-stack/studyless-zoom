@@ -28,10 +28,45 @@ export default function CombinedPage() {
   const [resultTab, setResultTab] = useState<'manager' | 'director'>('manager')
 
   async function transcribeUrl(url: string) {
-    setLoading(true)
-    setLoadingStep('Транскрибуємо дзвінок...')
-    setError('')
-    try {
+  setLoading(true)
+  setLoadingStep('Завантажуємо дзвінок...')
+  setError('')
+  try {
+    // Конвертуємо Google Drive посилання
+    const googleMatch = url.match(/drive\.google\.com\/file\/d\/([^/]+)/)
+    
+    if (googleMatch) {
+      // Google Drive — завантажуємо через браузер і відправляємо в AssemblyAI
+      const fileId = googleMatch[1]
+      const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`
+      
+      const fileRes = await fetch(downloadUrl)
+      const blob = await fileRes.blob()
+      
+      const keyRes = await fetch('/api/assemblyai-key')
+      const { key } = await keyRes.json()
+      
+      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: {
+          authorization: key,
+          'content-type': 'application/octet-stream',
+        },
+        body: blob,
+      })
+      const uploadData = await uploadRes.json()
+      
+      setLoadingStep('Транскрибуємо дзвінок...')
+      const res = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: uploadData.upload_url }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setTranscript(data.transcript)
+    } else {
+      // Ringostat або інше — передаємо напряму
       const res = await fetch('/api/transcribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -40,12 +75,13 @@ export default function CombinedPage() {
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setTranscript(data.transcript)
-    } catch {
-      setError('Помилка транскрибування. Спробуйте ще раз.')
     }
-    setLoading(false)
-    setLoadingStep('')
+  } catch {
+    setError('Помилка транскрибування. Спробуйте ще раз.')
   }
+  setLoading(false)
+  setLoadingStep('')
+}
 
   async function transcribeFile(file: File) {
     setLoading(true)
