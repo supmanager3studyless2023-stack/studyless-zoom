@@ -47,22 +47,35 @@ export default function CombinedPage() {
     setLoadingStep('')
   }
 
- async function transcribeFile(file: File) {
+async function transcribeFile(file: File) {
   setLoading(true)
   setLoadingStep('Завантажуємо аудіо...')
   setError('')
   try {
-    // Крок 1: завантажуємо файл напряму в AssemblyAI з браузера
-    const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
+    // Завантажуємо через наш edge endpoint (без ліміту 4.5mb)
+    const uploadRes = await fetch('/api/upload', {
       method: 'POST',
-      headers: {
-        authorization: process.env.NEXT_PUBLIC_ASSEMBLYAI_API_KEY!,
-        'content-type': 'application/octet-stream',
-      },
       body: file,
     })
     const uploadData = await uploadRes.json()
     const audioUrl = uploadData.upload_url
+
+    // Транскрибуємо
+    setLoadingStep('Транскрибуємо аудіо...')
+    const res = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: audioUrl }),
+    })
+    const data = await res.json()
+    if (data.error) throw new Error(data.error)
+    setTranscript(data.transcript)
+  } catch {
+    setError('Помилка транскрибування.')
+  }
+  setLoading(false)
+  setLoadingStep('')
+}
 
     // Крок 2: передаємо URL в наш API для транскрибування
     setLoadingStep('Транскрибуємо аудіо...')
