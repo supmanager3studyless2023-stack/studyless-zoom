@@ -47,52 +47,33 @@ export default function CombinedPage() {
     setLoadingStep('')
   }
 
-async function transcribeFile(file: File) {
-  setLoading(true)
-  setLoadingStep('Завантажуємо аудіо...')
-  setError('')
-  try {
-    // Завантажуємо через наш edge endpoint (без ліміту 4.5mb)
-    const uploadRes = await fetch('/api/upload', {
-      method: 'POST',
-      body: file,
-    })
-    const uploadData = await uploadRes.json()
-    const audioUrl = uploadData.upload_url
+  async function transcribeFile(file: File) {
+    setLoading(true)
+    setLoadingStep('Завантажуємо аудіо...')
+    setError('')
+    try {
+      const uploadRes = await fetch('/api/upload', {
+        method: 'POST',
+        body: file,
+      })
+      const uploadData = await uploadRes.json()
+      const audioUrl = uploadData.upload_url
 
-    // Транскрибуємо
-    setLoadingStep('Транскрибуємо аудіо...')
-    const res = await fetch('/api/transcribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: audioUrl }),
-    })
-    const data = await res.json()
-    if (data.error) throw new Error(data.error)
-    setTranscript(data.transcript)
-  } catch {
-    setError('Помилка транскрибування.')
+      setLoadingStep('Транскрибуємо аудіо...')
+      const res = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: audioUrl }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setTranscript(data.transcript)
+    } catch {
+      setError('Помилка транскрибування.')
+    }
+    setLoading(false)
+    setLoadingStep('')
   }
-  setLoading(false)
-  setLoadingStep('')
-}
-
-    // Крок 2: передаємо URL в наш API для транскрибування
-    setLoadingStep('Транскрибуємо аудіо...')
-    const res = await fetch('/api/transcribe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: audioUrl }),
-    })
-    const data = await res.json()
-    if (data.error) throw new Error(data.error)
-    setTranscript(data.transcript)
-  } catch {
-    setError('Помилка транскрибування.')
-  }
-  setLoading(false)
-  setLoadingStep('')
-}
 
   async function analyzeAll() {
     const textToAnalyze = transcript
@@ -129,7 +110,6 @@ async function transcribeFile(file: File) {
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-5xl mx-auto px-4 py-8">
 
-        {/* Header */}
         <div className="flex items-center gap-2 mb-6">
           <div className="w-3 h-3 rounded-full bg-violet-600"></div>
           <span className="font-medium text-gray-900">Study Less</span>
@@ -140,7 +120,6 @@ async function transcribeFile(file: File) {
           </div>
         </div>
 
-        {/* Форма */}
         {!result && (
           <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-4">
             <h1 className="text-lg font-medium text-gray-900 mb-1">Єдиний аналіз дзвінка</h1>
@@ -148,7 +127,6 @@ async function transcribeFile(file: File) {
               Одна кнопка — транскрипція + нотатки для менеджера + QA для керівника одночасно
             </p>
 
-            {/* Тип дотику */}
             <div className="flex gap-2 flex-wrap mb-4">
               {TOUCH_TYPES.map(t => (
                 <button
@@ -167,14 +145,12 @@ async function transcribeFile(file: File) {
               ))}
             </div>
 
-            {/* Мета поля */}
             <div className="grid grid-cols-3 gap-3 mb-3">
               <input value={managerName} onChange={e => setManagerName(e.target.value)} placeholder="Ім'я менеджера" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-400" />
               <input value={studentName} onChange={e => setStudentName(e.target.value)} placeholder="Ім'я студента" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-400" />
               <input value={sessionDate} onChange={e => setSessionDate(e.target.value)} type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-400" />
             </div>
 
-            {/* URL або файл */}
             <div className="mb-3">
               <label className="text-xs text-gray-500 mb-1 block">Посилання на запис дзвінка</label>
               <div className="flex gap-2">
@@ -205,7 +181,6 @@ async function transcribeFile(file: File) {
               />
             </div>
 
-            {/* Транскрипт */}
             <div className="mb-4">
               <label className="text-xs text-gray-500 mb-1 block">
                 Транскрипт {transcript && <span className="text-teal-600">✓ готово ({transcript.length} символів)</span>}
@@ -242,10 +217,8 @@ async function transcribeFile(file: File) {
           </div>
         )}
 
-        {/* Результат */}
         {result && (
           <div>
-            {/* Шапка результату */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 mb-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -271,7 +244,6 @@ async function transcribeFile(file: File) {
               </div>
             </div>
 
-            {/* Вкладки результату */}
             <div className="flex gap-1 bg-gray-100 rounded-xl p-1 mb-4 w-fit">
               <button
                 onClick={() => setResultTab('manager')}
@@ -287,7 +259,6 @@ async function transcribeFile(file: File) {
               </button>
             </div>
 
-            {/* Нотатки менеджера */}
             {resultTab === 'manager' && (
               <div className="bg-white rounded-2xl border border-gray-200 p-6">
                 <h2 className="font-medium text-gray-900 mb-4">Нотатки по студенту</h2>
@@ -304,11 +275,10 @@ async function transcribeFile(file: File) {
               </div>
             )}
 
-            {/* QA керівника */}
             {resultTab === 'director' && (
               <div>
                 <div className="bg-white rounded-2xl border border-gray-200 p-6 mb-4">
-                  <div className={`flex items-baseline gap-3 mb-3`}>
+                  <div className="flex items-baseline gap-3 mb-3">
                     <span className={`text-4xl font-bold ${SCORE_COLOR(result.director.overall_score)}`}>{result.director.overall_score}</span>
                     <span className="text-gray-300 text-2xl">/10</span>
                   </div>
