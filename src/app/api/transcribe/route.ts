@@ -1,3 +1,10 @@
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '50mb',
+    },
+  },
+}
 import { NextRequest, NextResponse } from 'next/server'
 
 const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY
