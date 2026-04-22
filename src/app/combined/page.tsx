@@ -40,7 +40,7 @@ export default function CombinedPage() {
       const fileId = googleMatch[1]
       const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`
       
-      const fileRes = await fetch(downloadUrl)
+      const fileRes = await fetch(`/api/proxy-download?url=${encodeURIComponent(downloadUrl)}`)
       const blob = await fileRes.blob()
       
       const keyRes = await fetch('/api/assemblyai-key')
