@@ -52,18 +52,24 @@ export default function CombinedPage() {
     setLoadingStep('Завантажуємо аудіо...')
     setError('')
     try {
-      const uploadRes = await fetch('/api/upload', {
+      const keyRes = await fetch('/api/assemblyai-key')
+      const { key } = await keyRes.json()
+
+      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
         method: 'POST',
+        headers: {
+          authorization: key,
+          'content-type': 'application/octet-stream',
+        },
         body: file,
       })
       const uploadData = await uploadRes.json()
-      const audioUrl = uploadData.upload_url
 
       setLoadingStep('Транскрибуємо аудіо...')
       const res = await fetch('/api/transcribe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: audioUrl }),
+        body: JSON.stringify({ url: uploadData.upload_url }),
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
