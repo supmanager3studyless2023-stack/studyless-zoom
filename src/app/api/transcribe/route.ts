@@ -24,6 +24,35 @@ async function uploadAudio(audioBlob: Blob): Promise<string> {
   return data.upload_url
 }
 
+async function transcribeAudio(audioUrl: string): Promise<string> {
+  const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+    method: 'POST',
+    headers: {
+      authorization: ASSEMBLYAI_API_KEY!,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      audio_url: audioUrl,
+      language_code: 'uk',
+      speech_model: 'universal-2', // ← виправлено (було speech_models: [...])
+    }),
+  })
+  const createData = await createRes.json()
+  console.log('AssemblyAI create response:', JSON.stringify(createData))
+  if (!createRes.ok) throw new Error(`Transcription request failed: ${JSON.stringify(createData)}`)
+
+  const { id } = createData
+  while (true) {
+    await new Promise(r => setTimeout(r, 3000))
+    const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
+      headers: { authorization: ASSEMBLYAI_API_KEY! },
+    })
+    const result = await pollRes.json()
+    if (result.status === 'completed') return result.text
+    if (result.status === 'error') throw new Error(result.error)
+  }
+}
+
 export async function POST(request: NextRequest) {
   const contentType = request.headers.get('content-type') || ''
   let audioUrl: string
@@ -32,7 +61,7 @@ export async function POST(request: NextRequest) {
     if (contentType.includes('application/json')) {
       const { url } = await request.json()
       if (!url) return NextResponse.json({ error: 'No URL' }, { status: 400 })
-      audioUrl = convertGoogleDriveUrl(url)
+      audioUrl = convertGoogleDriveUrl(url) // ← конвертація Google Drive
     } else {
       const formData = await request.formData()
       const file = formData.get('file') as File
@@ -41,29 +70,8 @@ export async function POST(request: NextRequest) {
       audioUrl = await uploadAudio(blob)
     }
 
-    // Запускаємо транскрипцію і одразу повертаємо id
-    const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
-      method: 'POST',
-      headers: {
-        authorization: ASSEMBLYAI_API_KEY!,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        audio_url: audioUrl,
-        language_code: 'uk',
-        speech_model: 'universal-2', // виправлено: була помилка — має бути speech_model (без s)
-      }),
-    })
-
-    const createData = await createRes.json()
-    console.log('AssemblyAI create response:', JSON.stringify(createData))
-
-    if (!createRes.ok) {
-      throw new Error(`Transcription request failed: ${JSON.stringify(createData)}`)
-    }
-
-    return NextResponse.json({ transcriptId: createData.id })
-
+    const transcript = await transcribeAudio(audioUrl)
+    return NextResponse.json({ transcript })
   } catch (err) {
     console.error('AssemblyAI error:', err)
     return NextResponse.json({ error: 'Transcription failed' }, { status: 500 })
