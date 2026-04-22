@@ -34,7 +34,7 @@ async function transcribeAudio(audioUrl: string): Promise<string> {
     body: JSON.stringify({
       audio_url: audioUrl,
       language_code: 'uk',
-      speech_model: 'universal-2', // ← виправлено (було speech_models: [...])
+      speech_models: 'universal-2', // ← виправлено (було speech_models: [...])
     }),
   })
   const createData = await createRes.json()
