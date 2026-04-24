@@ -3,7 +3,6 @@ import { appendToSheet } from '@/lib/sheets'
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 
-// ====== З api/scripts/route.ts ======
 const TOUCH_FIELDS: Record<string, { id: string; label: string }[]> = {
   'знайомство': [
     { id: 'g', label: 'G — ціль студента' },
@@ -88,7 +87,6 @@ const SHEET_NAMES: Record<string, string> = {
   'продаж': 'Продаж',
 }
 
-// ====== З api/director/route.ts ======
 const SCRIPTS: Record<string, string> = {
   'знайомство': `Скрипт Зум-знайомства:
 1. Встановлення контакту та план зустрічі
@@ -152,15 +150,15 @@ const SCRIPTS: Record<string, string> = {
 8. Формування горизонту на 15 тижнів
 9. Підсумок і якір на продовження`,
   'продаж': `Скрипт продажного дзвінка (15 тиждень):
-1. Вхід у розмову — задати рамку рішення
-2. Якір на результат — студент продає сам собі
-3. Актуальність цілі (шкала 0-10)
-4. Чесна точка: поточний рівень ≠ закрита ціль
-5. Міні-діагностика (що дає прогрес / що заважає)
-6. Варіанти руху далі (апсейл / основний / даунсейл)
-7. Вибір варіанту
-8. Закриття на оплату (дата + час)
-9. Фінальне резюме`,
+1. Вхід у розмову — задати рамку рішення ("дзвоню щоб допомогти, не продати")
+2. Якір на результат — студент продає сам собі (відчуття руху до цілі, ефективність)
+3. Актуальність цілі — що має з'явитись у наступному рівні, чого не вистачає
+4. Міні-діагностика — які компоненти (індивіди, SC, платформа) дали результат
+5. Офер — основний продукт під студента (не найвищий/найнижчий), потім матриця
+6. Вибір варіанту — студент сам називає варіант
+7. Закриття на оплату — конкретна дата + час, або 24г дедлайн
+8. Фінальне резюме — фіксація рішення, формату, дати оплати
+9. Письмове закріплення — одразу після дзвінка в месенджер`,
 }
 
 const CRITERIA_BY_TYPE: Record<string, { id: string; title: string }[]> = {
@@ -207,11 +205,14 @@ const CRITERIA_BY_TYPE: Record<string, { id: string; title: string }[]> = {
     { id: 'anchor', title: 'Якір на продовження' },
   ],
   'продаж': [
-    { id: 'frame', title: 'Рамка рішення' },
+    { id: 'frame', title: 'Рамка рішення (вхід у розмову)' },
     { id: 'anchor', title: 'Якір на результат' },
     { id: 'goal', title: 'Актуальність цілі' },
-    { id: 'offer', title: 'Презентація варіантів' },
+    { id: 'diagnostics', title: 'Міні-діагностика компонентів' },
+    { id: 'offer', title: 'Презентація офера' },
+    { id: 'choice', title: 'Вибір варіанту студентом' },
     { id: 'closing', title: 'Закриття на оплату' },
+    { id: 'summary', title: 'Фінальне резюме та закріплення' },
   ],
 }
 
@@ -230,7 +231,6 @@ export async function POST(request: NextRequest) {
   const criteria = CRITERIA_BY_TYPE[touchType] || CRITERIA_BY_TYPE['знайомство']
   const isZnayomstvo = touchType === 'знайомство'
 
-  // ====== ПРОМПТИ ======
   const managerPrompt = isZnayomstvo
     ? `Ти — AI-асистент для школи англійської мови Study Less. Аналізуй транскрипт Zoom-знайомства і заповни картку студента за GROW-моделлю.
 Відповідай ТІЛЬКИ у форматі JSON без markdown:
@@ -255,7 +255,7 @@ ${fields.map(f => `- id:"${f.id}" | ${f.label}`).join('\n')}
 ${transcript}`
 
   const directorPrompt = `Ти — експерт з QA для школи англійської мови Study Less. Проаналізуй транскрипт дзвінка менеджера зі студентом і оціни якість роботи менеджера згідно скрипту.
-Тип дзвінку: ${touchType === 'знайомство' ? 'Зум-знайомство' : `Контрольний дотик ${touchType}`}
+Тип дзвінку: ${touchType === 'знайомство' ? 'Зум-знайомство' : touchType === 'продаж' ? 'Продажний дзвінок 15 тиждень' : `Контрольний дотик ${touchType}`}
 Менеджер: ${managerName || 'невідомо'}
 Студент: ${studentName || 'невідомо'}
 СКРИПТ ДЛЯ ОЦІНКИ:
@@ -286,7 +286,6 @@ ${criteria.map(c => `- id:"${c.id}" | ${c.title}`).join('\n')}
 ТРАНСКРИПТ:
 ${transcript}`
 
-  // ====== ПАРАЛЕЛЬНИЙ АНАЛІЗ ======
   const [managerMsg, directorMsg] = await Promise.all([
     anthropic.messages.create({
       model: 'claude-sonnet-4-5',
@@ -308,7 +307,6 @@ ${transcript}`
   const managerParsed = parseJson(managerMsg)
   const directorParsed = parseJson(directorMsg)
 
-  // ====== ЗБЕРЕЖЕННЯ В SUPABASE ======
   await Promise.all([
     supabase.from('touch_analyses').insert({
       manager_email: 'test@studyless.com',
@@ -332,20 +330,56 @@ ${transcript}`
     }).then(({ error }) => { if (error) console.error('Supabase director error:', error) }),
   ])
 
-  // ====== GOOGLE SHEETS (лише менеджер) ======
-  const sheetName = SHEET_NAMES[touchType] || 'Sessions'
-  try {
-    await appendToSheet(sheetName, [
-      new Date().toLocaleDateString('uk-UA'),
-      'test@studyless.com',
-      managerName || '',
-      studentName || '',
-      sessionDate || '',
-      ...(fathomLink ? [fathomLink] : []),
-      ...managerParsed.results.map((r: any) => r.value),
-    ])
-  } catch (e) {
-    console.error('Sheets error:', e)
+  // ====== GOOGLE SHEETS — менеджер (всі типи крім продажу) ======
+  if (touchType !== 'продаж') {
+    const sheetName = SHEET_NAMES[touchType] || 'Sessions'
+    try {
+      await appendToSheet(sheetName, [
+        new Date().toLocaleDateString('uk-UA'),
+        'test@studyless.com',
+        managerName || '',
+        studentName || '',
+        sessionDate || '',
+        ...(fathomLink ? [fathomLink] : []),
+        ...managerParsed.results.map((r: any) => r.value),
+      ])
+    } catch (e) {
+      console.error('Sheets error:', e)
+    }
+  }
+
+// ====== GOOGLE SHEETS — керівник (продаж) ======
+  if (touchType === 'продаж') {
+    try {
+      const d = directorParsed
+      const criteriaMap: Record<string, any> = {}
+      d.criteria?.forEach((c: any) => { criteriaMap[c.id] = c })
+
+      const formatBlock = (c: any) => c
+        ? `${c.score}/10\n+ ${c.strong}\n→ ${c.improve}`
+        : ''
+
+      await appendToSheet('Аналізи вигрузка', [
+        new Date().toLocaleDateString('uk-UA'),  // Дата
+        managerName || '',                        // Менеджер
+        studentName || '',                        // Студент
+        sessionDate || '',                        // Дата сесії
+        d.overall_score ?? '',                    // Загальна оцінка
+        d.overall_comment ?? '',                  // Загальний коментар
+        formatBlock(criteriaMap['frame']),        // Рамка рішення
+        formatBlock(criteriaMap['anchor']),       // Якір на результат
+        formatBlock(criteriaMap['goal']),         // Актуальність цілі
+        formatBlock(criteriaMap['diagnostics']),  // Міні-діагностика
+        formatBlock(criteriaMap['offer']),        // Презентація офера
+        formatBlock(criteriaMap['choice']),       // Вибір варіанту
+        formatBlock(criteriaMap['closing']),      // Закриття на оплату
+        formatBlock(criteriaMap['summary']),      // Фінальне резюме
+        d.top_strengths?.join('\n') ?? '',        // Сильні сторони
+        d.top_improvements?.join('\n') ?? '',     // Що покращити
+      ])
+    } catch (e) {
+      console.error('Sheets director error:', e)
+    }
   }
 
   return NextResponse.json({
