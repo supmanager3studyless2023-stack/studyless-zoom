@@ -330,24 +330,6 @@ ${transcript}`
     }).then(({ error }) => { if (error) console.error('Supabase director error:', error) }),
   ])
 
-  // ====== GOOGLE SHEETS — менеджер (всі типи крім продажу) ======
-  if (touchType !== 'продаж') {
-    const sheetName = SHEET_NAMES[touchType] || 'Sessions'
-    try {
-      await appendToSheet(sheetName, [
-        new Date().toLocaleDateString('uk-UA'),
-        'test@studyless.com',
-        managerName || '',
-        studentName || '',
-        sessionDate || '',
-        ...(fathomLink ? [fathomLink] : []),
-        ...managerParsed.results.map((r: any) => r.value),
-      ])
-    } catch (e) {
-      console.error('Sheets error:', e)
-    }
-  }
-
 // ====== GOOGLE SHEETS — керівник (продаж) ======
   if (touchType === 'продаж') {
     try {
@@ -359,28 +341,137 @@ ${transcript}`
         ? `${c.score}/10\n+ ${c.strong}\n→ ${c.improve}`
         : ''
 
-      await appendToSheet('Аналізи вигрузка', [
-        new Date().toLocaleDateString('uk-UA'),  // Дата
-        managerName || '',                        // Менеджер
-        studentName || '',                        // Студент
-        sessionDate || '',                        // Дата сесії
-        d.overall_score ?? '',                    // Загальна оцінка
-        d.overall_comment ?? '',                  // Загальний коментар
-        formatBlock(criteriaMap['frame']),        // Рамка рішення
-        formatBlock(criteriaMap['anchor']),       // Якір на результат
-        formatBlock(criteriaMap['goal']),         // Актуальність цілі
-        formatBlock(criteriaMap['diagnostics']),  // Міні-діагностика
-        formatBlock(criteriaMap['offer']),        // Презентація офера
-        formatBlock(criteriaMap['choice']),       // Вибір варіанту
-        formatBlock(criteriaMap['closing']),      // Закриття на оплату
-        formatBlock(criteriaMap['summary']),      // Фінальне резюме
-        d.top_strengths?.join('\n') ?? '',        // Сильні сторони
-        d.top_improvements?.join('\n') ?? '',     // Що покращити
+      await appendToSheet('Аналізи Продажі', [
+        new Date().toLocaleDateString('uk-UA'),
+        managerName || '',
+        studentName || '',
+        sessionDate || '',
+        d.overall_score ?? '',
+        d.overall_comment ?? '',
+        formatBlock(criteriaMap['frame']),
+        formatBlock(criteriaMap['anchor']),
+        formatBlock(criteriaMap['goal']),
+        formatBlock(criteriaMap['diagnostics']),
+        formatBlock(criteriaMap['offer']),
+        formatBlock(criteriaMap['choice']),
+        formatBlock(criteriaMap['closing']),
+        formatBlock(criteriaMap['summary']),
+        d.top_strengths?.join('\n') ?? '',
+        d.top_improvements?.join('\n') ?? '',
       ])
     } catch (e) {
-      console.error('Sheets director error:', e)
+      console.error('Sheets продаж error:', e)
     }
   }
+
+  // ====== GOOGLE SHEETS — керівник (знайомство) ======
+  if (touchType === 'знайомство') {
+    try {
+      const d = directorParsed
+      const criteriaMap: Record<string, any> = {}
+      d.criteria?.forEach((c: any) => { criteriaMap[c.id] = c })
+
+      const formatBlock = (c: any) => c
+        ? `${c.score}/10\n+ ${c.strong}\n→ ${c.improve}`
+        : ''
+
+      await appendToSheet('Аналізи Знайомства', [
+        new Date().toLocaleDateString('uk-UA'),
+        managerName || '',
+        studentName || '',
+        sessionDate || '',
+        d.overall_score ?? '',
+        d.overall_comment ?? '',
+        formatBlock(criteriaMap['contact']),
+        formatBlock(criteriaMap['grow']),
+        formatBlock(criteriaMap['needs']),
+        formatBlock(criteriaMap['tariff']),
+        formatBlock(criteriaMap['closing']),
+        d.top_strengths?.join('\n') ?? '',
+        d.top_improvements?.join('\n') ?? '',
+      ])
+    } catch (e) {
+      console.error('Sheets знайомство error:', e)
+    }
+  }
+
+  // ====== GOOGLE SHEETS — керівник (КД) ======
+  if (['1т', '2т', '4т', '8т', '12т'].includes(touchType)) {
+    try {
+      const d = directorParsed
+      const criteriaMap: Record<string, any> = {}
+      d.criteria?.forEach((c: any) => { criteriaMap[c.id] = c })
+
+      const formatBlock = (c: any) => c
+        ? `${c.score}/10\n+ ${c.strong}\n→ ${c.improve}`
+        : ''
+
+      // Критерії спільні для всіх КД
+      const kdCriteriaIds: Record<string, string[]> = {
+        '1т': ['contact', 'diagnostics', 'success', 'barriers', 'next_week'],
+        '2т': ['contact', 'expectations', 'success', 'components', 'next_criteria'],
+        '4т': ['contact', 'pace', 'success', 'upsell', 'next_criteria'],
+        '8т': ['contact', 'progress', 'redflags', 'upsell', 'next_criteria'],
+        '12т': ['contact', 'result', 'goal', 'sufficiency', 'anchor'],
+      }
+
+      const kdTitles: Record<string, string[]> = {
+        '1т': ['Вхід в контакт', 'Діагностика стану', 'Критерії успіху', 'Виявлення бар\'єрів', 'Критерії 2го тижня'],
+        '2т': ['Вхід в контакт', 'Очікування vs реальність', 'Критерії успіху', 'Компоненти навчання', 'Критерії 4 тижнів'],
+        '4т': ['Вхід в контакт', 'Темп і метч', 'Критерії успіху', 'Апсейл блок', 'Критерії 8 тижнів'],
+        '8т': ['Вхід в контакт', 'Виявлення прогресу', 'Ред-флаги', 'Апсейл блок', 'Критерії 12 тижнів'],
+        '12т': ['Вхід в контакт', 'Виявлення результату', 'Актуальність цілі', 'Достатність рівня', 'Якір на продовження'],
+      }
+
+      const ids = kdCriteriaIds[touchType] || []
+      const titles = kdTitles[touchType] || []
+
+      // Формуємо 5 блоків з назвою критерію
+      const blocks = ids.map((id, i) => {
+        const c = criteriaMap[id]
+        const title = titles[i] || id
+        return c
+          ? `${title}\n${c.score}/10\n+ ${c.strong}\n→ ${c.improve}`
+          : `${title}\n—`
+      })
+
+      await appendToSheet('Аналізи КД', [
+        new Date().toLocaleDateString('uk-UA'),
+        managerName || '',
+        studentName || '',
+        sessionDate || '',
+        touchType,                              // Який саме КД
+        d.overall_score ?? '',
+        d.overall_comment ?? '',
+        ...blocks,                              // 5 блоків критеріїв
+        d.top_strengths?.join('\n') ?? '',
+        d.top_improvements?.join('\n') ?? '',
+      ])
+    } catch (e) {
+      console.error('Sheets КД error:', e)
+    }
+  }
+
+  // ====== GOOGLE SHEETS — менеджер (всі типи) ======
+  const sheetName = SHEET_NAMES[touchType] || 'Sessions'
+  try {
+    await appendToSheet(sheetName, [
+      new Date().toLocaleDateString('uk-UA'),
+      'test@studyless.com',
+      managerName || '',
+      studentName || '',
+      sessionDate || '',
+      ...(fathomLink ? [fathomLink] : []),
+      ...managerParsed.results.map((r: any) => r.value),
+    ])
+  } catch (e) {
+    console.error('Sheets менеджер error:', e)
+  }
+
+  return NextResponse.json({
+    manager: managerParsed,
+    director: directorParsed,
+  })
 
   return NextResponse.json({
     manager: managerParsed,
