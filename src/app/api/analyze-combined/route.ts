@@ -271,7 +271,10 @@ export async function POST(request: NextRequest) {
   const { transcript, touchType, managerName, studentName, sessionDate, fathomLink } = await request.json()
   if (!transcript) return NextResponse.json({ error: 'No transcript' }, { status: 400 })
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    defaultHeaders: { 'anthropic-beta': 'prompt-caching-2024-07-31' },
+  })
   const fields = TOUCH_FIELDS[touchType] || TOUCH_FIELDS['знайомство']
   const script = SCRIPTS[touchType] || SCRIPTS['знайомство']
   const criteria = CRITERIA_BY_TYPE[touchType] || CRITERIA_BY_TYPE['знайомство']
@@ -301,10 +304,8 @@ ${fields.map(f => `- id:"${f.id}" | ${f.label}`).join('\n')}
 ТРАНСКРИПТ:
 ${transcript}`
 
-  const directorPrompt = `Ти — експерт з QA для школи англійської мови Study Less. Проаналізуй транскрипт дзвінка менеджера зі студентом і оціни якість роботи менеджера згідно скрипту.
+  const directorSystemText = `Ти — експерт з QA для школи англійської мови Study Less. Проаналізуй транскрипт дзвінка менеджера зі студентом і оціни якість роботи менеджера згідно скрипту.
 Тип дзвінку: ${touchType === 'знайомство' ? 'Зум-знайомство' : touchType === 'продаж' ? 'Продажний дзвінок 15 тиждень' : `Контрольний дотик ${touchType}`}
-Менеджер: ${managerName || 'невідомо'}
-Студент: ${studentName || 'невідомо'}
 СКРИПТ ДЛЯ ОЦІНКИ:
 ${script}
 Відповідай ТІЛЬКИ у форматі JSON без markdown:
@@ -329,15 +330,14 @@ ${script}
 }
 КРИТЕРІЇ:
 ${criteria.map(c => `- id:"${c.id}" | ${c.title}`).join('\n')}
-Всі відповіді українською мовою.
+Всі відповіді українською мовою.`
+
+  const directorUserText = `Менеджер: ${managerName || 'невідомо'}
+Студент: ${studentName || 'невідомо'}
 ТРАНСКРИПТ:
 ${transcript}`
 
-  const feedbackPrompt = `Ти — старший sales coach школи англійської мови Study Less. Проаналізуй транскрипт продажного дзвінка та надай детальний персональний фідбек у вигляді повного HTML-документу.
-
-Менеджер: ${managerName || 'невідомо'}
-Студент: ${studentName || 'невідомо'}
-Дата: ${sessionDate || new Date().toLocaleDateString('uk-UA')}
+  const feedbackSystemText = `Ти — старший sales coach школи англійської мови Study Less. Проаналізуй транскрипт продажного дзвінка та надай детальний персональний фідбек у вигляді повного HTML-документу.
 
 СКРИПТ ПРОДАЖНОГО ДЗВІНКА 3.0 (15 тиждень):
 ${SCRIPTS['продаж']}
@@ -353,9 +353,6 @@ ${CRITERIA_BY_TYPE['продаж'].map(c => `- ${c.title}`).join('\n')}
 - Відкрите «подумаю» без конкретного дедлайну рішення (Блок 8)
 - Відсутність шкали готовності 1-10 (Блок 3)
 - Перехід до офера без діагностики компонентів (пропущений Блок 5)
-
-ТРАНСКРИПТ:
-${transcript}
 
 Поверни ВИКЛЮЧНО повний HTML-документ від <!DOCTYPE html> до </html>. Жодних пояснень до або після.
 
@@ -470,8 +467,9 @@ CSS (обов'язково вбудувати у <style> в <head>, точно �
     anthropic.messages.create({
       model: 'claude-sonnet-4-5',
       max_tokens: 4000,
-      messages: [{ role: 'user', content: directorPrompt }],
-    }),
+      system: [{ type: 'text', text: directorSystemText, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: directorUserText }],
+    } as any),
   ])
 
   const managerParsed = parseJson(managerMsg)
@@ -493,13 +491,19 @@ CSS (обов'язково вбудувати у <style> в <head>, точно �
       '',
     ].join('\n')
 
-    const finalFeedbackPrompt = feedbackPrompt.replace('ТРАНСКРИПТ:', scoreContext + '\nТРАНСКРИПТ:')
+    const finalFeedbackUserText = `Менеджер: ${managerName || 'невідомо'}
+Студент: ${studentName || 'невідомо'}
+Дата: ${sessionDate || new Date().toLocaleDateString('uk-UA')}
+${scoreContext}
+ТРАНСКРИПТ:
+${transcript}`
 
     feedbackMsg = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 10000,
-      messages: [{ role: 'user', content: finalFeedbackPrompt }],
-    })
+      system: [{ type: 'text', text: feedbackSystemText, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: finalFeedbackUserText }],
+    } as any)
   }
 
   let feedbackHtml: string | null = null
