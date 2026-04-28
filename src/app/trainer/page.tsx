@@ -2,6 +2,13 @@
 export const dynamic = 'force-dynamic'
 import { useState, useRef, useEffect, useCallback } from 'react'
 
+declare global {
+  interface Window {
+    SpeechRecognition: any
+    webkitSpeechRecognition: any
+  }
+}
+
 const LEVELS = ['A1', 'A2', 'B1', 'B2', 'C1']
 const OBJECTIONS = ['подумаю', 'дорого', 'порадитись', 'немає часу', 'вже вчу в іншому місці']
 
@@ -37,10 +44,43 @@ export default function TrainerPage() {
   const [streaming, setStreaming] = useState(false)
   const [scoring, setScoring] = useState(false)
   const [result, setResult] = useState<ScoreResult | null>(null)
+  const [voiceMode, setVoiceMode] = useState(false)
+  const [listening, setListening] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const recognitionRef = useRef<any>(null)
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+
+  const speakText = useCallback((text: string) => {
+    if (!voiceMode || typeof window === 'undefined') return
+    window.speechSynthesis.cancel()
+    const utt = new SpeechSynthesisUtterance(text)
+    utt.lang = 'uk-UA'
+    utt.rate = 0.95
+    const voices = window.speechSynthesis.getVoices()
+    const ukVoice = voices.find(v => v.lang.startsWith('uk')) ?? voices.find(v => v.lang.startsWith('ru')) ?? null
+    if (ukVoice) utt.voice = ukVoice
+    window.speechSynthesis.speak(utt)
+  }, [voiceMode])
+
+  const startListening = useCallback(() => {
+    const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition
+    if (!SR) return
+    const rec = new SR()
+    recognitionRef.current = rec
+    rec.lang = 'uk-UA'
+    rec.continuous = false
+    rec.interimResults = false
+    rec.onstart = () => setListening(true)
+    rec.onend = () => setListening(false)
+    rec.onerror = () => setListening(false)
+    rec.onresult = (e: any) => {
+      const text = e.results[0][0].transcript
+      if (text.trim()) sendMessage(text.trim())
+    }
+    rec.start()
+  }, [sendMessage])
 
   const startChat = () => {
     setMessages([{ role: 'assistant', content: 'Алло?' }])
@@ -78,11 +118,12 @@ export default function TrainerPage() {
           return copy
         })
       }
+      if (assistantText) speakText(assistantText)
     } finally {
       setStreaming(false)
       setTimeout(() => inputRef.current?.focus(), 50)
     }
-  }, [messages, profile, streaming])
+  }, [messages, profile, streaming, speakText])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) }
@@ -118,9 +159,15 @@ export default function TrainerPage() {
         <a href="/dashboard" style={{ color: '#94a3b8', fontSize: 13, textDecoration: 'none' }}>← Дашборд</a>
         <span style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>AI-тренажер · Продаж 3.0</span>
         {phase === 'chat' && (
-          <span style={{ marginLeft: 8, background: '#7c3aed', color: '#fff', fontSize: 12, fontWeight: 600, padding: '3px 10px', borderRadius: 20 }}>
-            {OBJECTION_LABEL[profile.objection]}
-          </span>
+          <>
+            <span style={{ background: '#7c3aed', color: '#fff', fontSize: 12, fontWeight: 600, padding: '3px 10px', borderRadius: 20 }}>
+              {OBJECTION_LABEL[profile.objection]}
+            </span>
+            <button onClick={() => { setVoiceMode(v => !v); window.speechSynthesis?.cancel() }}
+              style={{ marginLeft: 'auto', padding: '5px 14px', borderRadius: 20, border: '1px solid', borderColor: voiceMode ? '#6ee7b7' : '#475569', background: voiceMode ? 'rgba(16,185,129,0.15)' : 'transparent', color: voiceMode ? '#6ee7b7' : '#94a3b8', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+              {voiceMode ? '🔊 Голос увімкнений' : '🔇 Увімкнути голос'}
+            </button>
+          </>
         )}
       </div>
 
@@ -215,6 +262,24 @@ export default function TrainerPage() {
           </div>
 
           <div style={{ paddingTop: 12, borderTop: '1px solid #e5e7eb' }}>
+            {voiceMode && (
+              <div style={{ marginBottom: 10, textAlign: 'center' }}>
+                <button onClick={startListening} disabled={streaming || listening}
+                  style={{
+                    width: 64, height: 64, borderRadius: '50%', border: 'none',
+                    background: listening ? '#ef4444' : '#6366f1',
+                    color: '#fff', fontSize: 26, cursor: streaming || listening ? 'not-allowed' : 'pointer',
+                    boxShadow: listening ? '0 0 0 8px rgba(239,68,68,0.25)' : '0 2px 8px rgba(99,102,241,0.4)',
+                    transition: 'all 0.2s',
+                  }}>
+                  {listening ? '⏹' : '🎙️'}
+                </button>
+                <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6 }}>
+                  {listening ? 'Слухаю...' : streaming ? 'Студент відповідає...' : 'Натисни і говори'}
+                </div>
+              </div>
+            )}
+            {!voiceMode && (
             <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
               <textarea
                 ref={inputRef}
@@ -231,6 +296,7 @@ export default function TrainerPage() {
                 {streaming ? '...' : '↑'}
               </button>
             </div>
+            )}
             <button onClick={finishSession} disabled={messages.length < 5 || scoring}
               style={{ width: '100%', padding: '11px', borderRadius: 10, border: '1px solid #d1d5db', background: '#fff', color: messages.length < 5 ? '#9ca3af' : '#374151', fontWeight: 600, fontSize: 14, cursor: messages.length < 5 ? 'not-allowed' : 'pointer' }}>
               {scoring ? 'Аналізую дзвінок...' : messages.length < 5 ? `Мінімум ${5 - messages.length} повідомлень для оцінки` : '📊 Завершити та отримати оцінку'}
