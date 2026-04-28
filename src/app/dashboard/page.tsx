@@ -62,7 +62,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 }
 
 export default function DashboardPage() {
-  const [period, setPeriod]       = useState('all')
+  const [period, setPeriod]       = useState('day')
   const [manager, setManager]     = useState('')
   const [touchType, setTouchType] = useState('')
   const [data, setData]           = useState<any>(null)
