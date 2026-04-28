@@ -399,7 +399,7 @@ export default function DashboardPage() {
                       <tr key={r.id} style={{ borderBottom: '1px solid #f3f4f6', background: i % 2 === 0 ? '#fff' : '#f9fafb' }}>
                         <td style={{ padding: '9px 12px', color: '#374151' }}>{r.managerName || '—'}</td>
                         <td style={{ padding: '9px 12px', color: '#374151' }}>{r.studentName || '—'}</td>
-                        <td style={{ padding: '9px 12px', color: '#6b7280' }}>{TOUCH_LABELS[r.touchType] ?? r.touchType || '—'}</td>
+                        <td style={{ padding: '9px 12px', color: '#6b7280' }}>{(TOUCH_LABELS[r.touchType] ?? r.touchType) || '—'}</td>
                         <td style={{ padding: '9px 12px' }}><ScoreBadge score={r.overallScore} /></td>
                         <td style={{ padding: '9px 12px', color: '#9ca3af' }}>
                           {r.sessionDate || new Date(r.createdAt).toLocaleDateString('uk-UA')}
