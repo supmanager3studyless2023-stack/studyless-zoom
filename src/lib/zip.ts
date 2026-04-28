@@ -17,16 +17,13 @@ function crc32(data: Uint8Array): number {
 function w16(dv: DataView, o: number, v: number) { dv.setUint16(o, v, true) }
 function w32(dv: DataView, o: number, v: number) { dv.setUint32(o, v, true) }
 
-// TextEncoder.encode() returns Uint8Array<ArrayBufferLike> in TS 5.7+.
-// Wrapping in new Uint8Array() ensures Uint8Array<ArrayBuffer>, which satisfies BlobPart.
-function toBytes(s: string): Uint8Array<ArrayBuffer> {
-  const encoded = new TextEncoder().encode(s)
-  return new Uint8Array(encoded)
+function toBytes(s: string): Uint8Array {
+  return new Uint8Array(new TextEncoder().encode(s).buffer as ArrayBuffer)
 }
 
 export function createZipBlob(files: { name: string; content: string }[]): Blob {
   const parts: BlobPart[] = []
-  type Entry = { nb: Uint8Array<ArrayBuffer>; dataLen: number; crc: number; offset: number }
+  type Entry = { nb: Uint8Array; dataLen: number; crc: number; offset: number }
   const entries: Entry[] = []
   let off = 0
 
