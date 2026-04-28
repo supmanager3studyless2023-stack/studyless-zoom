@@ -460,12 +460,12 @@ CSS (обов'язково вбудувати у <style> в <head>, точно �
   // Step 1: run manager + director in parallel
   const [managerMsg, directorMsg] = await Promise.all([
     anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 4000,
       messages: [{ role: 'user', content: managerPrompt }],
     }),
     anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
       max_tokens: 4000,
       system: [{ type: 'text', text: directorSystemText, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: directorUserText }],
