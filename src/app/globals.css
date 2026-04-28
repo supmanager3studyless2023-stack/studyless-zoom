@@ -17,6 +17,56 @@
     --background: #0a0a0a;
     --foreground: #ededed;
   }
+
+  /* Surfaces */
+  .bg-gray-50 { background-color: #111827; }
+  .bg-white { background-color: #1f2937; }
+  .bg-gray-100 { background-color: #374151; }
+  .bg-gray-200 { background-color: #4b5563; }
+
+  /* Text */
+  .text-gray-900 { color: #f9fafb; }
+  .text-gray-800 { color: #e5e7eb; }
+  .text-gray-700 { color: #d1d5db; }
+  .text-gray-600 { color: #9ca3af; }
+  .text-gray-500 { color: #9ca3af; }
+  .text-gray-400 { color: #6b7280; }
+
+  /* Borders */
+  .border-gray-200 { border-color: #374151; }
+  .border-gray-100 { border-color: #374151; }
+  .border-l-gray-200 { border-left-color: #374151; }
+
+  /* Accent sections (strengths / improvements) */
+  .bg-teal-50 { background-color: rgba(20, 184, 166, 0.12); }
+  .border-teal-200 { border-color: rgba(20, 184, 166, 0.3); }
+  .text-teal-800 { color: #5eead4; }
+  .text-teal-700 { color: #2dd4bf; }
+  .bg-amber-50 { background-color: rgba(245, 158, 11, 0.12); }
+  .border-amber-200 { border-color: rgba(245, 158, 11, 0.3); }
+  .text-amber-800 { color: #fcd34d; }
+  .text-amber-700 { color: #fbbf24; }
+  .bg-red-50 { background-color: rgba(239, 68, 68, 0.12); }
+  .border-red-200 { border-color: rgba(239, 68, 68, 0.3); }
+
+  /* Tag pills */
+  .bg-teal-100 { background-color: rgba(20, 184, 166, 0.15); }
+  .bg-violet-100 { background-color: rgba(139, 92, 246, 0.15); }
+  .bg-amber-100 { background-color: rgba(245, 158, 11, 0.15); }
+  .text-violet-800 { color: #c4b5fd; }
+
+  /* Form inputs */
+  input:not([type="submit"]):not([type="button"]):not([type="file"]),
+  textarea,
+  select {
+    background-color: #1f2937;
+    color: #f9fafb;
+    border-color: #374151;
+  }
+  input::placeholder,
+  textarea::placeholder {
+    color: #6b7280;
+  }
 }
 
 body {

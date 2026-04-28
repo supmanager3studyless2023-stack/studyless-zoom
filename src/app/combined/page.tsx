@@ -1,5 +1,6 @@
 'use client'
 import { useState } from 'react'
+import { createZipBlob } from '@/lib/zip'
 
 const TOUCH_TYPES = ['знайомство', '1т', '2т', '4т', '8т', '12т', 'продаж']
 const TOUCH_LABELS: Record<string, string> = {
@@ -24,6 +25,7 @@ export default function CombinedPage() {
   const [loading, setLoading] = useState(false)
   const [loadingStep, setLoadingStep] = useState('')
   const [result, setResult] = useState<any>(null)
+  const [feedbackHtml, setFeedbackHtml] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [resultTab, setResultTab] = useState<'manager' | 'director'>('manager')
 
@@ -140,12 +142,29 @@ export default function CombinedPage() {
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setResult(data)
+      setFeedbackHtml(data.feedback_html ?? null)
       setResultTab('manager')
     } catch {
       setError('Помилка аналізу. Спробуйте ще раз.')
     }
     setLoading(false)
     setLoadingStep('')
+  }
+
+  function downloadFeedback() {
+    if (!feedbackHtml) return
+    const safeName = (studentName || 'аналіз').replace(/\s+/g, '_')
+    const safeDate = (sessionDate || new Date().toLocaleDateString('uk-UA')).replace(/\./g, '-')
+    const filename = `feedback_${safeName}_${safeDate}.html`
+    const blob = createZipBlob([{ name: filename, content: feedbackHtml }])
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `feedback_${safeName}_${safeDate}.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   return (
@@ -156,10 +175,7 @@ export default function CombinedPage() {
           <div className="w-3 h-3 rounded-full bg-violet-600"></div>
           <span className="font-medium text-gray-900">Study Less</span>
           <span className="text-gray-400 text-sm">/ Аналіз дзвінка</span>
-          <div className="ml-auto flex gap-3">
-            <a href="/scripts" className="text-sm text-gray-400 hover:text-gray-600">Менеджер</a>
-            <a href="/director" className="text-sm text-gray-400 hover:text-gray-600">Керівник</a>
-          </div>
+          <a href="/dashboard" className="ml-auto text-sm text-violet-600 hover:underline font-medium">Дашборд →</a>
         </div>
 
         {!result && (
@@ -277,12 +293,22 @@ export default function CombinedPage() {
                     <span className="text-gray-300">/10</span>
                   </div>
                 </div>
-                <button
-                  onClick={() => { setResult(null); setTranscript(''); setCallUrl('') }}
-                  className="text-sm px-3 py-1.5 border border-gray-200 rounded-lg text-gray-500 hover:text-gray-700"
-                >
-                  Новий аналіз
-                </button>
+                <div className="flex items-center gap-2">
+                  {feedbackHtml && (
+                    <button
+                      onClick={downloadFeedback}
+                      className="text-sm px-3 py-1.5 bg-violet-600 text-white rounded-lg hover:bg-violet-700 font-medium"
+                    >
+                      Завантажити фідбек .zip
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setResult(null); setFeedbackHtml(null); setTranscript(''); setCallUrl('') }}
+                    className="text-sm px-3 py-1.5 border border-gray-200 rounded-lg text-gray-500 hover:text-gray-700"
+                  >
+                    Новий аналіз
+                  </button>
+                </div>
               </div>
             </div>
 
