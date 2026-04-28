@@ -64,24 +64,6 @@ export default function TrainerPage() {
     window.speechSynthesis.speak(utt)
   }, [voiceMode])
 
-  const startListening = useCallback(() => {
-    const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition
-    if (!SR) return
-    const rec = new SR()
-    recognitionRef.current = rec
-    rec.lang = 'uk-UA'
-    rec.continuous = false
-    rec.interimResults = false
-    rec.onstart = () => setListening(true)
-    rec.onend = () => setListening(false)
-    rec.onerror = () => setListening(false)
-    rec.onresult = (e: any) => {
-      const text = e.results[0][0].transcript
-      if (text.trim()) sendMessage(text.trim())
-    }
-    rec.start()
-  }, [sendMessage])
-
   const startChat = () => {
     setMessages([{ role: 'assistant', content: 'Алло?' }])
     setPhase('chat')
@@ -124,6 +106,24 @@ export default function TrainerPage() {
       setTimeout(() => inputRef.current?.focus(), 50)
     }
   }, [messages, profile, streaming, speakText])
+
+  const startListening = useCallback(() => {
+    const SR = window.SpeechRecognition ?? window.webkitSpeechRecognition
+    if (!SR) return
+    const rec = new SR()
+    recognitionRef.current = rec
+    rec.lang = 'uk-UA'
+    rec.continuous = false
+    rec.interimResults = false
+    rec.onstart = () => setListening(true)
+    rec.onend = () => setListening(false)
+    rec.onerror = () => setListening(false)
+    rec.onresult = (e: any) => {
+      const text = e.results[0][0].transcript
+      if (text.trim()) sendMessage(text.trim())
+    }
+    rec.start()
+  }, [sendMessage])
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(input) }
