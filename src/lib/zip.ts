@@ -17,7 +17,7 @@ function crc32(data: Uint8Array): number {
 function w16(dv: DataView, o: number, v: number) { dv.setUint16(o, v, true) }
 function w32(dv: DataView, o: number, v: number) { dv.setUint32(o, v, true) }
 
-function toBytes(s: string): Uint8Array {
+function toBytes(s: string) {
   const encoded = new TextEncoder().encode(s)
   const buffer = new ArrayBuffer(encoded.length)
   new Uint8Array(buffer).set(encoded)
