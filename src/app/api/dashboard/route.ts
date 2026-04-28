@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
-
 function periodStart(period: string): string | null {
   const now = new Date()
   switch (period) {
@@ -18,6 +13,11 @@ function periodStart(period: string): string | null {
 }
 
 export async function GET(request: NextRequest) {
+  try {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  )
   const { searchParams } = request.nextUrl
   const period    = searchParams.get('period') ?? 'all'
   const manager   = searchParams.get('manager') ?? ''
@@ -156,4 +156,7 @@ export async function GET(request: NextRequest) {
     touchTypeStats,
     recent,
   })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? String(e) }, { status: 500 })
+  }
 }

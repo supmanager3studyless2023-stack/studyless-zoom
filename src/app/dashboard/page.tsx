@@ -67,6 +67,7 @@ export default function DashboardPage() {
   const [touchType, setTouchType] = useState('')
   const [data, setData]           = useState<any>(null)
   const [loading, setLoading]     = useState(false)
+  const [loadError, setLoadError] = useState('')
   const [activeTab, setActiveTab] = useState<'errors' | 'strengths'>('errors')
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [summaryUrl, setSummaryUrl]         = useState<string | null>(null)
@@ -75,15 +76,17 @@ export default function DashboardPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
+    setLoadError('')
     try {
       const params = new URLSearchParams({ period })
       if (manager)   params.set('manager', manager)
       if (touchType) params.set('touchType', touchType)
       const res = await fetch(`/api/dashboard?${params}`)
       const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`)
       setData(json)
-    } catch (e) {
-      console.error(e)
+    } catch (e: any) {
+      setLoadError(e?.message ?? String(e))
     } finally {
       setLoading(false)
     }
@@ -230,6 +233,12 @@ export default function DashboardPage() {
         </Card>
 
         <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+
+        {loadError && (
+          <div style={{ padding: '16px 20px', borderRadius: 10, background: '#fef2f2', border: '1px solid #fca5a5', color: '#ef4444', fontSize: 14, marginBottom: 16 }}>
+            Помилка завантаження: {loadError}
+          </div>
+        )}
 
         {loading && (
           <div style={{ textAlign: 'center', padding: '60px 0', color: '#9ca3af', fontSize: 15 }}>Завантаження...</div>
@@ -396,7 +405,7 @@ export default function DashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.recent.map((r: any, i: number) => (
+                    {data.recent?.map((r: any, i: number) => (
                       <tr key={r.id} style={{ borderBottom: '1px solid #f3f4f6', background: i % 2 === 0 ? '#fff' : '#f9fafb' }}>
                         <td style={{ padding: '9px 12px', color: '#374151' }}>{r.managerName || '—'}</td>
                         <td style={{ padding: '9px 12px', color: '#374151' }}>{r.studentName || '—'}</td>
