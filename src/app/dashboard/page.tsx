@@ -123,6 +123,7 @@ export default function DashboardPage() {
       <div style={{ background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '16px 32px', display: 'flex', alignItems: 'center', gap: 16 }}>
         <a href="/combined" style={{ color: '#6b7280', textDecoration: 'none', fontSize: 14 }}>← Аналіз</a>
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#111827', flex: 1 }}>Дашборд аналітики</h1>
+        <a href="/trainer" style={{ fontSize: 13, color: '#7c3aed', textDecoration: 'none', fontWeight: 600, border: '1px solid #c4b5fd', borderRadius: 8, padding: '6px 14px' }}>🎯 Тренажер</a>
       </div>
 
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '28px 24px' }}>
