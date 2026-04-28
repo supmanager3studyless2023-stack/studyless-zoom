@@ -451,7 +451,10 @@ CSS (обов'язково вбудувати у <style> в <head>, точно �
 
   const parseJson = (msg: any) => {
     const raw = msg.content.map((c: any) => c.type === 'text' ? c.text : '').join('')
-    return JSON.parse(raw.replace(/```json|```/g, '').trim())
+    const cleaned = raw.replace(/```json|```/g, '').trim()
+    const match = cleaned.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error(`No JSON found in response. Raw: ${cleaned.slice(0, 200)}`)
+    return JSON.parse(match[0])
   }
 
   const getText = (msg: any): string =>
@@ -466,7 +469,7 @@ CSS (обов'язково вбудувати у <style> в <head>, точно �
     }),
     anthropic.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 4000,
+      max_tokens: 8000,
       system: [{ type: 'text', text: directorSystemText, cache_control: { type: 'ephemeral' } }],
       messages: [{ role: 'user', content: directorUserText }],
     } as any),
