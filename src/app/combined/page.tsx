@@ -26,6 +26,8 @@ export default function CombinedPage() {
   const [loadingStep, setLoadingStep] = useState('')
   const [result, setResult] = useState<any>(null)
   const [feedbackHtml, setFeedbackHtml] = useState<string | null>(null)
+  const [loadingHtml, setLoadingHtml] = useState(false)
+  const [htmlError, setHtmlError] = useState('')
   const [error, setError] = useState('')
   const [resultTab, setResultTab] = useState<'manager' | 'director'>('manager')
 
@@ -142,13 +144,39 @@ export default function CombinedPage() {
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setResult(data)
-      setFeedbackHtml(data.feedback_html ?? null)
+      setFeedbackHtml(null)
+      setHtmlError('')
       setResultTab('manager')
     } catch {
       setError('Помилка аналізу. Спробуйте ще раз.')
     }
     setLoading(false)
     setLoadingStep('')
+  }
+
+  async function generateFeedback() {
+    if (!result) return
+    setLoadingHtml(true)
+    setHtmlError('')
+    try {
+      const res = await fetch('/api/feedback-html', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcript,
+          managerName,
+          studentName,
+          sessionDate,
+          directorAnalysis: result.director,
+        }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setFeedbackHtml(data.html)
+    } catch (e: any) {
+      setHtmlError('Помилка генерації фідбеку. Спробуйте ще раз.')
+    }
+    setLoadingHtml(false)
   }
 
   function downloadFeedback() {
@@ -293,7 +321,21 @@ export default function CombinedPage() {
                     <span className="text-gray-300">/10</span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {touchType === 'продаж' && !feedbackHtml && (
+                    <button
+                      onClick={generateFeedback}
+                      disabled={loadingHtml}
+                      className="text-sm px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {loadingHtml ? (
+                        <>
+                          <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          Генерую фідбек...
+                        </>
+                      ) : 'Фідбек для менеджера'}
+                    </button>
+                  )}
                   {feedbackHtml && (
                     <button
                       onClick={downloadFeedback}
@@ -301,6 +343,9 @@ export default function CombinedPage() {
                     >
                       Завантажити фідбек .zip
                     </button>
+                  )}
+                  {htmlError && (
+                    <span className="text-xs text-red-500">{htmlError}</span>
                   )}
                   <button
                     onClick={() => { setResult(null); setFeedbackHtml(null); setTranscript(''); setCallUrl('') }}

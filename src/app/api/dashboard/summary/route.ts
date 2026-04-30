@@ -107,8 +107,8 @@ HTML-звіт повинен містити РІВНО такі секції (і
 ВАЖЛИВО: Поверни ТІЛЬКИ HTML без жодних markdown-блоків чи поясненнь. Починай з <!DOCTYPE html>.`
 
   const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 8000,
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 6000,
     messages: [{ role: 'user', content: prompt }],
   })
 
