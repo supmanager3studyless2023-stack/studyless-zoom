@@ -9,6 +9,13 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY
 
+interface Utterance {
+  speaker: string
+  text: string
+  start: number
+  end: number
+}
+
 function convertGoogleDriveUrl(url: string): string {
   const match = url.match(/drive\.google\.com\/file\/d\/([^/]+)/)
   if (match) {
@@ -31,7 +38,21 @@ async function uploadAudio(audioBlob: Blob): Promise<string> {
   return data.upload_url
 }
 
-async function transcribeAudio(audioUrl: string): Promise<string> {
+function calcSpeakerStats(utterances: Utterance[]): Record<string, { ms: number; percent: number }> {
+  const durations: Record<string, number> = {}
+  for (const u of utterances) {
+    durations[u.speaker] = (durations[u.speaker] || 0) + (u.end - u.start)
+  }
+  const total = Object.values(durations).reduce((a, b) => a + b, 0)
+  return Object.fromEntries(
+    Object.entries(durations).map(([speaker, ms]) => [
+      speaker,
+      { ms, percent: total > 0 ? Math.round((ms / total) * 100) : 0 },
+    ])
+  )
+}
+
+async function transcribeAudio(audioUrl: string): Promise<{ text: string; utterances: Utterance[] }> {
   const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
     headers: {
@@ -41,7 +62,8 @@ async function transcribeAudio(audioUrl: string): Promise<string> {
     body: JSON.stringify({
       audio_url: audioUrl,
       language_code: 'uk',
-     speech_models: ['universal-2'],// ← виправлено (було speech_models: [...])
+      speech_model: 'best',
+      speaker_labels: true,
     }),
   })
   const createData = await createRes.json()
@@ -55,7 +77,12 @@ async function transcribeAudio(audioUrl: string): Promise<string> {
       headers: { authorization: ASSEMBLYAI_API_KEY! },
     })
     const result = await pollRes.json()
-    if (result.status === 'completed') return result.text
+    if (result.status === 'completed') {
+      return {
+        text: result.text,
+        utterances: result.utterances || [],
+      }
+    }
     if (result.status === 'error') throw new Error(result.error)
   }
 }
@@ -68,7 +95,7 @@ export async function POST(request: NextRequest) {
     if (contentType.includes('application/json')) {
       const { url } = await request.json()
       if (!url) return NextResponse.json({ error: 'No URL' }, { status: 400 })
-      audioUrl = convertGoogleDriveUrl(url) // ← конвертація Google Drive
+      audioUrl = convertGoogleDriveUrl(url)
     } else {
       const formData = await request.formData()
       const file = formData.get('file') as File
@@ -77,8 +104,10 @@ export async function POST(request: NextRequest) {
       audioUrl = await uploadAudio(blob)
     }
 
-    const transcript = await transcribeAudio(audioUrl)
-    return NextResponse.json({ transcript })
+    const { text, utterances } = await transcribeAudio(audioUrl)
+    const speakerStats = calcSpeakerStats(utterances)
+
+    return NextResponse.json({ transcript: text, utterances, speakerStats })
   } catch (err) {
     console.error('AssemblyAI error:', err)
     return NextResponse.json({ error: 'Transcription failed' }, { status: 500 })

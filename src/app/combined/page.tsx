@@ -15,10 +15,52 @@ const TOUCH_LABELS: Record<string, string> = {
 const SCORE_COLOR = (s: number) => s >= 8 ? 'text-teal-600' : s >= 6 ? 'text-amber-500' : 'text-red-500'
 const SCORE_BG = (s: number) => s >= 8 ? 'bg-teal-50 border-teal-200' : s >= 6 ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'
 
+interface Utterance {
+  speaker: string
+  text: string
+  start: number
+  end: number
+}
+
+interface SpeakerStat {
+  ms: number
+  percent: number
+}
+
+function buildLabeledTranscript(
+  utterances: Utterance[],
+  speakerRoles: Record<string, 'manager' | 'student'>,
+  managerName: string,
+  studentName: string
+): string {
+  if (!utterances.length) return ''
+  return utterances
+    .map(u => {
+      const role = speakerRoles[u.speaker]
+      const label = role === 'manager'
+        ? `[${managerName || 'Менеджер'}]`
+        : role === 'student'
+        ? `[${studentName || 'Студент'}]`
+        : `[Мовець ${u.speaker}]`
+      return `${label}: ${u.text}`
+    })
+    .join('\n')
+}
+
+function msToMin(ms: number): string {
+  const total = Math.round(ms / 1000)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return m > 0 ? `${m}хв ${s}с` : `${s}с`
+}
+
 export default function CombinedPage() {
   const [touchType, setTouchType] = useState('знайомство')
   const [callUrl, setCallUrl] = useState('')
   const [transcript, setTranscript] = useState('')
+  const [utterances, setUtterances] = useState<Utterance[]>([])
+  const [speakerStats, setSpeakerStats] = useState<Record<string, SpeakerStat>>({})
+  const [speakerRoles, setSpeakerRoles] = useState<Record<string, 'manager' | 'student'>>({})
   const [managerName, setManagerName] = useState('')
   const [studentName, setStudentName] = useState('')
   const [sessionDate, setSessionDate] = useState('')
@@ -31,61 +73,78 @@ export default function CombinedPage() {
   const [error, setError] = useState('')
   const [resultTab, setResultTab] = useState<'manager' | 'director'>('manager')
 
-  async function transcribeUrl(url: string) {
-  setLoading(true)
-  setLoadingStep('Завантажуємо дзвінок...')
-  setError('')
-  try {
-    // Конвертуємо Google Drive посилання
-    const googleMatch = url.match(/drive\.google\.com\/file\/d\/([^/]+)/)
-    
-    if (googleMatch) {
-      // Google Drive — завантажуємо через браузер і відправляємо в AssemblyAI
-      const fileId = googleMatch[1]
-      const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`
-      
-      const fileRes = await fetch(`/api/proxy-download?url=${encodeURIComponent(downloadUrl)}`)
-      const blob = await fileRes.blob()
-      
-      const keyRes = await fetch('/api/assemblyai-key')
-      const { key } = await keyRes.json()
-      
-      const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
-        method: 'POST',
-        headers: {
-          authorization: key,
-          'content-type': 'application/octet-stream',
-        },
-        body: blob,
-      })
-      const uploadData = await uploadRes.json()
-      
-      setLoadingStep('Транскрибуємо дзвінок...')
-      const res = await fetch('/api/transcribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: uploadData.upload_url }),
-      })
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
-      setTranscript(data.transcript)
-    } else {
-      // Ringostat або інше — передаємо напряму
-      const res = await fetch('/api/transcribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      })
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
-      setTranscript(data.transcript)
+  function handleTranscriptionResult(data: { transcript: string; utterances?: Utterance[]; speakerStats?: Record<string, SpeakerStat> }) {
+    setTranscript(data.transcript)
+    const utts = data.utterances || []
+    const stats = data.speakerStats || {}
+    setUtterances(utts)
+    setSpeakerStats(stats)
+
+    // Auto-assign roles: speaker with more speaking time = manager
+    if (utts.length > 0) {
+      const speakers = Object.keys(stats)
+      if (speakers.length === 2) {
+        const sorted = speakers.sort((a, b) => (stats[b]?.ms || 0) - (stats[a]?.ms || 0))
+        setSpeakerRoles({ [sorted[0]]: 'manager', [sorted[1]]: 'student' })
+      } else if (speakers.length === 1) {
+        setSpeakerRoles({ [speakers[0]]: 'manager' })
+      }
     }
-  } catch {
-    setError('Помилка транскрибування. Спробуйте ще раз.')
   }
-  setLoading(false)
-  setLoadingStep('')
-}
+
+  async function transcribeUrl(url: string) {
+    setLoading(true)
+    setLoadingStep('Завантажуємо дзвінок...')
+    setError('')
+    try {
+      const googleMatch = url.match(/drive\.google\.com\/file\/d\/([^/]+)/)
+
+      if (googleMatch) {
+        const fileId = googleMatch[1]
+        const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`
+
+        const fileRes = await fetch(`/api/proxy-download?url=${encodeURIComponent(downloadUrl)}`)
+        const blob = await fileRes.blob()
+
+        const keyRes = await fetch('/api/assemblyai-key')
+        const { key } = await keyRes.json()
+
+        const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
+          method: 'POST',
+          headers: {
+            authorization: key,
+            'content-type': 'application/octet-stream',
+          },
+          body: blob,
+        })
+        const uploadData = await uploadRes.json()
+
+        setLoadingStep('Транскрибуємо дзвінок...')
+        const res = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: uploadData.upload_url }),
+        })
+        const data = await res.json()
+        if (data.error) throw new Error(data.error)
+        handleTranscriptionResult(data)
+      } else {
+        setLoadingStep('Транскрибуємо дзвінок...')
+        const res = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        })
+        const data = await res.json()
+        if (data.error) throw new Error(data.error)
+        handleTranscriptionResult(data)
+      }
+    } catch {
+      setError('Помилка транскрибування. Спробуйте ще раз.')
+    }
+    setLoading(false)
+    setLoadingStep('')
+  }
 
   async function transcribeFile(file: File) {
     setLoading(true)
@@ -113,7 +172,7 @@ export default function CombinedPage() {
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
-      setTranscript(data.transcript)
+      handleTranscriptionResult(data)
     } catch {
       setError('Помилка транскрибування.')
     }
@@ -121,8 +180,20 @@ export default function CombinedPage() {
     setLoadingStep('')
   }
 
+  function toggleSpeakerRole(speaker: string) {
+    setSpeakerRoles(prev => {
+      const current = prev[speaker]
+      if (current === 'manager') return { ...prev, [speaker]: 'student' }
+      if (current === 'student') return { ...prev, [speaker]: 'manager' }
+      return { ...prev, [speaker]: 'manager' }
+    })
+  }
+
   async function analyzeAll() {
-    const textToAnalyze = transcript
+    const labeledTranscript = utterances.length > 0
+      ? buildLabeledTranscript(utterances, speakerRoles, managerName, studentName)
+      : transcript
+    const textToAnalyze = labeledTranscript || transcript
     if (textToAnalyze.length < 100) { setError('Вставте транскрипт або завантажте аудіо'); return }
     setError('')
     setLoading(true)
@@ -159,11 +230,14 @@ export default function CombinedPage() {
     setLoadingHtml(true)
     setHtmlError('')
     try {
+      const labeledTranscript = utterances.length > 0
+        ? buildLabeledTranscript(utterances, speakerRoles, managerName, studentName)
+        : transcript
       const res = await fetch('/api/feedback-html', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transcript,
+          transcript: labeledTranscript || transcript,
           managerName,
           studentName,
           sessionDate,
@@ -194,6 +268,9 @@ export default function CombinedPage() {
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
   }
+
+  const speakers = Object.keys(speakerStats).sort()
+  const hasMultipleSpeakers = speakers.length >= 2
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -267,9 +344,54 @@ export default function CombinedPage() {
               />
             </div>
 
+            {/* Speaker stats + role assignment */}
+            {hasMultipleSpeakers && (
+              <div className="mb-4 border border-gray-200 rounded-xl p-4 bg-gray-50">
+                <div className="text-xs font-medium text-gray-500 mb-3">Розподіл мовців (клікніть щоб змінити роль)</div>
+                <div className="flex flex-col gap-2">
+                  {speakers.map(speaker => {
+                    const stat = speakerStats[speaker]
+                    const role = speakerRoles[speaker]
+                    const isManager = role === 'manager'
+                    const isStudent = role === 'student'
+                    return (
+                      <div key={speaker} className="flex items-center gap-3">
+                        <button
+                          onClick={() => toggleSpeakerRole(speaker)}
+                          className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                            isManager
+                              ? 'bg-violet-100 text-violet-700 border-violet-300'
+                              : isStudent
+                              ? 'bg-teal-100 text-teal-700 border-teal-300'
+                              : 'bg-gray-100 text-gray-500 border-gray-200'
+                          }`}
+                        >
+                          {isManager ? 'Менеджер' : isStudent ? 'Студент' : `Мовець ${speaker}`}
+                        </button>
+                        <div className="flex-1">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-gray-400">{msToMin(stat.ms)}</span>
+                            <span className={`text-xs font-semibold ${isManager ? 'text-violet-600' : isStudent ? 'text-teal-600' : 'text-gray-500'}`}>
+                              {stat.percent}%
+                            </span>
+                          </div>
+                          <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${isManager ? 'bg-violet-400' : isStudent ? 'bg-teal-400' : 'bg-gray-300'}`}
+                              style={{ width: `${stat.percent}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
             <div className="mb-4">
               <label className="text-xs text-gray-500 mb-1 block">
-                Транскрипт {transcript && <span className="text-teal-600">✓ готово ({transcript.length} символів)</span>}
+                Транскрипт {transcript && <span className="text-teal-600">✓ готово ({transcript.length} символів{utterances.length > 0 ? `, ${utterances.length} реплік` : ''})</span>}
               </label>
               <textarea
                 value={transcript}
@@ -306,7 +428,7 @@ export default function CombinedPage() {
         {result && (
           <div>
             <div className="bg-white rounded-2xl border border-gray-200 p-5 mb-4">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between flex-wrap gap-3">
                 <div>
                   <div className="text-sm text-gray-500 mb-1">
                     {managerName && <span>Менеджер: <b>{managerName}</b></span>}
@@ -320,6 +442,21 @@ export default function CombinedPage() {
                     </span>
                     <span className="text-gray-300">/10</span>
                   </div>
+                  {/* Speaker stats in result header */}
+                  {hasMultipleSpeakers && (
+                    <div className="flex gap-3 mt-2">
+                      {speakers.map(speaker => {
+                        const stat = speakerStats[speaker]
+                        const role = speakerRoles[speaker]
+                        const label = role === 'manager' ? (managerName || 'Менеджер') : role === 'student' ? (studentName || 'Студент') : `Мовець ${speaker}`
+                        return (
+                          <span key={speaker} className={`text-xs px-2 py-0.5 rounded-full ${role === 'manager' ? 'bg-violet-100 text-violet-700' : role === 'student' ? 'bg-teal-100 text-teal-700' : 'bg-gray-100 text-gray-500'}`}>
+                            {label}: {stat.percent}%
+                          </span>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   {touchType === 'продаж' && !feedbackHtml && (
@@ -348,7 +485,7 @@ export default function CombinedPage() {
                     <span className="text-xs text-red-500">{htmlError}</span>
                   )}
                   <button
-                    onClick={() => { setResult(null); setFeedbackHtml(null); setTranscript(''); setCallUrl('') }}
+                    onClick={() => { setResult(null); setFeedbackHtml(null); setTranscript(''); setCallUrl(''); setUtterances([]); setSpeakerStats({}); setSpeakerRoles({}) }}
                     className="text-sm px-3 py-1.5 border border-gray-200 rounded-lg text-gray-500 hover:text-gray-700"
                   >
                     Новий аналіз
@@ -362,13 +499,13 @@ export default function CombinedPage() {
                 onClick={() => setResultTab('manager')}
                 className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${resultTab === 'manager' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
               >
-                📋 Нотатки менеджера
+                Нотатки менеджера
               </button>
               <button
                 onClick={() => setResultTab('director')}
                 className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${resultTab === 'director' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
               >
-                📊 QA керівника
+                QA керівника
               </button>
             </div>
 
