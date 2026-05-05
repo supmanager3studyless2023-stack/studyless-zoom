@@ -52,53 +52,31 @@ function calcSpeakerStats(utterances: Utterance[]): Record<string, { ms: number;
   )
 }
 
-async function submitTranscript(audioUrl: string, withSpeakers: boolean): Promise<string> {
-  const body: Record<string, unknown> = {
-    audio_url: audioUrl,
-    language_code: 'uk',
-  }
-  if (withSpeakers) body.speaker_labels = true
-
+async function transcribeAudio(audioUrl: string): Promise<{ text: string; utterances: Utterance[] }> {
   const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
     headers: {
       authorization: ASSEMBLYAI_API_KEY!,
       'content-type': 'application/json',
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      audio_url: audioUrl,
+      language_code: 'uk',
+    }),
   })
   const createData = await createRes.json()
   console.log('AssemblyAI create response:', JSON.stringify(createData))
   if (!createRes.ok) throw new Error(`Transcription request failed: ${JSON.stringify(createData)}`)
-  return createData.id
-}
 
-async function pollTranscript(id: string): Promise<{ text: string; utterances: Utterance[] }> {
+  const { id } = createData
   while (true) {
     await new Promise(r => setTimeout(r, 3000))
     const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
       headers: { authorization: ASSEMBLYAI_API_KEY! },
     })
     const result = await pollRes.json()
-    if (result.status === 'completed') {
-      return {
-        text: result.text,
-        utterances: result.utterances || [],
-      }
-    }
+    if (result.status === 'completed') return { text: result.text, utterances: [] }
     if (result.status === 'error') throw new Error(result.error)
-  }
-}
-
-async function transcribeAudio(audioUrl: string): Promise<{ text: string; utterances: Utterance[] }> {
-  // Try with speaker diarization first; fall back to plain if unsupported for this language
-  try {
-    const id = await submitTranscript(audioUrl, true)
-    return await pollTranscript(id)
-  } catch (err) {
-    console.warn('Speaker diarization failed, retrying without:', err)
-    const id = await submitTranscript(audioUrl, false)
-    return await pollTranscript(id)
   }
 }
 

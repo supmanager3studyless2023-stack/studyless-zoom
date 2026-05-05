@@ -15,52 +15,29 @@ const TOUCH_LABELS: Record<string, string> = {
 const SCORE_COLOR = (s: number) => s >= 8 ? 'text-teal-600' : s >= 6 ? 'text-amber-500' : 'text-red-500'
 const SCORE_BG = (s: number) => s >= 8 ? 'bg-teal-50 border-teal-200' : s >= 6 ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'
 
-interface Utterance {
-  speaker: string
+interface DiarizedUtterance {
+  speaker: 'manager' | 'student'
   text: string
-  start: number
-  end: number
 }
 
-interface SpeakerStat {
-  ms: number
-  percent: number
+interface DiarizeResult {
+  utterances: DiarizedUtterance[]
+  managerPercent: number
+  studentPercent: number
 }
 
-function buildLabeledTranscript(
-  utterances: Utterance[],
-  speakerRoles: Record<string, 'manager' | 'student'>,
-  managerName: string,
-  studentName: string
-): string {
-  if (!utterances.length) return ''
+function buildLabeledTranscript(utterances: DiarizedUtterance[], managerName: string, studentName: string): string {
   return utterances
-    .map(u => {
-      const role = speakerRoles[u.speaker]
-      const label = role === 'manager'
-        ? `[${managerName || 'Менеджер'}]`
-        : role === 'student'
-        ? `[${studentName || 'Студент'}]`
-        : `[Мовець ${u.speaker}]`
-      return `${label}: ${u.text}`
-    })
+    .map(u => `[${u.speaker === 'manager' ? (managerName || 'Менеджер') : (studentName || 'Студент')}]: ${u.text}`)
     .join('\n')
-}
-
-function msToMin(ms: number): string {
-  const total = Math.round(ms / 1000)
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return m > 0 ? `${m}хв ${s}с` : `${s}с`
 }
 
 export default function CombinedPage() {
   const [touchType, setTouchType] = useState('знайомство')
   const [callUrl, setCallUrl] = useState('')
   const [transcript, setTranscript] = useState('')
-  const [utterances, setUtterances] = useState<Utterance[]>([])
-  const [speakerStats, setSpeakerStats] = useState<Record<string, SpeakerStat>>({})
-  const [speakerRoles, setSpeakerRoles] = useState<Record<string, 'manager' | 'student'>>({})
+  const [diarize, setDiarize] = useState<DiarizeResult | null>(null)
+  const [diarizing, setDiarizing] = useState(false)
   const [managerName, setManagerName] = useState('')
   const [studentName, setStudentName] = useState('')
   const [sessionDate, setSessionDate] = useState('')
@@ -73,27 +50,26 @@ export default function CombinedPage() {
   const [error, setError] = useState('')
   const [resultTab, setResultTab] = useState<'manager' | 'director'>('manager')
 
-  function handleTranscriptionResult(data: { transcript: string; utterances?: Utterance[]; speakerStats?: Record<string, SpeakerStat> }) {
-    setTranscript(data.transcript)
-    const utts = data.utterances || []
-    const stats = data.speakerStats || {}
-    setUtterances(utts)
-    setSpeakerStats(stats)
-
-    // Auto-assign roles: speaker with more speaking time = manager
-    if (utts.length > 0) {
-      const speakers = Object.keys(stats)
-      if (speakers.length === 2) {
-        const sorted = speakers.sort((a, b) => (stats[b]?.ms || 0) - (stats[a]?.ms || 0))
-        setSpeakerRoles({ [sorted[0]]: 'manager', [sorted[1]]: 'student' })
-      } else if (speakers.length === 1) {
-        setSpeakerRoles({ [speakers[0]]: 'manager' })
-      }
+  async function runDiarize(text: string) {
+    if (text.length < 100) return
+    setDiarizing(true)
+    try {
+      const res = await fetch('/api/diarize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript: text, managerName, studentName }),
+      })
+      const data = await res.json()
+      if (!data.error && data.utterances?.length) setDiarize(data)
+    } catch {
+      // diarization is optional — silently ignore
     }
+    setDiarizing(false)
   }
 
   async function transcribeUrl(url: string) {
     setLoading(true)
+    setDiarize(null)
     setLoadingStep('Завантажуємо дзвінок...')
     setError('')
     try {
@@ -102,7 +78,6 @@ export default function CombinedPage() {
       if (googleMatch) {
         const fileId = googleMatch[1]
         const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`
-
         const fileRes = await fetch(`/api/proxy-download?url=${encodeURIComponent(downloadUrl)}`)
         const blob = await fileRes.blob()
 
@@ -111,10 +86,7 @@ export default function CombinedPage() {
 
         const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
           method: 'POST',
-          headers: {
-            authorization: key,
-            'content-type': 'application/octet-stream',
-          },
+          headers: { authorization: key, 'content-type': 'application/octet-stream' },
           body: blob,
         })
         const uploadData = await uploadRes.json()
@@ -127,7 +99,11 @@ export default function CombinedPage() {
         })
         const data = await res.json()
         if (data.error) throw new Error(data.error)
-        handleTranscriptionResult(data)
+        setTranscript(data.transcript)
+        setLoading(false)
+        setLoadingStep('')
+        setLoadingStep('Визначаємо мовців...')
+        await runDiarize(data.transcript)
       } else {
         setLoadingStep('Транскрибуємо дзвінок...')
         const res = await fetch('/api/transcribe', {
@@ -137,7 +113,11 @@ export default function CombinedPage() {
         })
         const data = await res.json()
         if (data.error) throw new Error(data.error)
-        handleTranscriptionResult(data)
+        setTranscript(data.transcript)
+        setLoading(false)
+        setLoadingStep('')
+        setLoadingStep('Визначаємо мовців...')
+        await runDiarize(data.transcript)
       }
     } catch {
       setError('Помилка транскрибування. Спробуйте ще раз.')
@@ -148,6 +128,7 @@ export default function CombinedPage() {
 
   async function transcribeFile(file: File) {
     setLoading(true)
+    setDiarize(null)
     setLoadingStep('Завантажуємо аудіо...')
     setError('')
     try {
@@ -156,10 +137,7 @@ export default function CombinedPage() {
 
       const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
         method: 'POST',
-        headers: {
-          authorization: key,
-          'content-type': 'application/octet-stream',
-        },
+        headers: { authorization: key, 'content-type': 'application/octet-stream' },
         body: file,
       })
       const uploadData = await uploadRes.json()
@@ -172,7 +150,10 @@ export default function CombinedPage() {
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
-      handleTranscriptionResult(data)
+      setTranscript(data.transcript)
+      setLoading(false)
+      setLoadingStep('Визначаємо мовців...')
+      await runDiarize(data.transcript)
     } catch {
       setError('Помилка транскрибування.')
     }
@@ -180,20 +161,10 @@ export default function CombinedPage() {
     setLoadingStep('')
   }
 
-  function toggleSpeakerRole(speaker: string) {
-    setSpeakerRoles(prev => {
-      const current = prev[speaker]
-      if (current === 'manager') return { ...prev, [speaker]: 'student' }
-      if (current === 'student') return { ...prev, [speaker]: 'manager' }
-      return { ...prev, [speaker]: 'manager' }
-    })
-  }
-
   async function analyzeAll() {
-    const labeledTranscript = utterances.length > 0
-      ? buildLabeledTranscript(utterances, speakerRoles, managerName, studentName)
+    const textToAnalyze = diarize?.utterances?.length
+      ? buildLabeledTranscript(diarize.utterances, managerName, studentName)
       : transcript
-    const textToAnalyze = labeledTranscript || transcript
     if (textToAnalyze.length < 100) { setError('Вставте транскрипт або завантажте аудіо'); return }
     setError('')
     setLoading(true)
@@ -230,14 +201,14 @@ export default function CombinedPage() {
     setLoadingHtml(true)
     setHtmlError('')
     try {
-      const labeledTranscript = utterances.length > 0
-        ? buildLabeledTranscript(utterances, speakerRoles, managerName, studentName)
+      const textForFeedback = diarize?.utterances?.length
+        ? buildLabeledTranscript(diarize.utterances, managerName, studentName)
         : transcript
       const res = await fetch('/api/feedback-html', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transcript: labeledTranscript || transcript,
+          transcript: textForFeedback,
           managerName,
           studentName,
           sessionDate,
@@ -247,7 +218,7 @@ export default function CombinedPage() {
       const data = await res.json()
       if (data.error) throw new Error(data.error)
       setFeedbackHtml(data.html)
-    } catch (e: any) {
+    } catch {
       setHtmlError('Помилка генерації фідбеку. Спробуйте ще раз.')
     }
     setLoadingHtml(false)
@@ -269,8 +240,7 @@ export default function CombinedPage() {
     URL.revokeObjectURL(url)
   }
 
-  const speakers = Object.keys(speakerStats).sort()
-  const hasMultipleSpeakers = speakers.length >= 2
+  const isProcessing = loading || diarizing
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -326,7 +296,7 @@ export default function CombinedPage() {
                 />
                 <button
                   onClick={() => { if (callUrl) transcribeUrl(callUrl) }}
-                  disabled={loading || !callUrl}
+                  disabled={isProcessing || !callUrl}
                   className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200 disabled:opacity-50"
                 >
                   Транскрибувати
@@ -344,54 +314,45 @@ export default function CombinedPage() {
               />
             </div>
 
-            {/* Speaker stats + role assignment */}
-            {hasMultipleSpeakers && (
+            {/* Speaker stats */}
+            {diarize && (
               <div className="mb-4 border border-gray-200 rounded-xl p-4 bg-gray-50">
-                <div className="text-xs font-medium text-gray-500 mb-3">Розподіл мовців (клікніть щоб змінити роль)</div>
+                <div className="text-xs font-medium text-gray-500 mb-3">Розподіл мовців</div>
                 <div className="flex flex-col gap-2">
-                  {speakers.map(speaker => {
-                    const stat = speakerStats[speaker]
-                    const role = speakerRoles[speaker]
-                    const isManager = role === 'manager'
-                    const isStudent = role === 'student'
-                    return (
-                      <div key={speaker} className="flex items-center gap-3">
-                        <button
-                          onClick={() => toggleSpeakerRole(speaker)}
-                          className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
-                            isManager
-                              ? 'bg-violet-100 text-violet-700 border-violet-300'
-                              : isStudent
-                              ? 'bg-teal-100 text-teal-700 border-teal-300'
-                              : 'bg-gray-100 text-gray-500 border-gray-200'
-                          }`}
-                        >
-                          {isManager ? 'Менеджер' : isStudent ? 'Студент' : `Мовець ${speaker}`}
-                        </button>
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs text-gray-400">{msToMin(stat.ms)}</span>
-                            <span className={`text-xs font-semibold ${isManager ? 'text-violet-600' : isStudent ? 'text-teal-600' : 'text-gray-500'}`}>
-                              {stat.percent}%
-                            </span>
-                          </div>
-                          <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${isManager ? 'bg-violet-400' : isStudent ? 'bg-teal-400' : 'bg-gray-300'}`}
-                              style={{ width: `${stat.percent}%` }}
-                            />
-                          </div>
-                        </div>
+                  <div className="flex items-center gap-3">
+                    <span className="flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium bg-violet-100 text-violet-700 border border-violet-300 w-24 text-center">
+                      {managerName || 'Менеджер'}
+                    </span>
+                    <div className="flex-1">
+                      <div className="flex justify-end mb-1">
+                        <span className="text-xs font-semibold text-violet-600">{diarize.managerPercent}%</span>
                       </div>
-                    )
-                  })}
+                      <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-violet-400" style={{ width: `${diarize.managerPercent}%` }} />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium bg-teal-100 text-teal-700 border border-teal-300 w-24 text-center">
+                      {studentName || 'Студент'}
+                    </span>
+                    <div className="flex-1">
+                      <div className="flex justify-end mb-1">
+                        <span className="text-xs font-semibold text-teal-600">{diarize.studentPercent}%</span>
+                      </div>
+                      <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="h-full rounded-full bg-teal-400" style={{ width: `${diarize.studentPercent}%` }} />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
 
             <div className="mb-4">
               <label className="text-xs text-gray-500 mb-1 block">
-                Транскрипт {transcript && <span className="text-teal-600">✓ готово ({transcript.length} символів{utterances.length > 0 ? `, ${utterances.length} реплік` : ''})</span>}
+                Транскрипт {transcript && <span className="text-teal-600">✓ готово ({transcript.length} символів)</span>}
+                {diarizing && <span className="text-violet-500 ml-2">· Визначаємо мовців...</span>}
               </label>
               <textarea
                 value={transcript}
@@ -402,7 +363,7 @@ export default function CombinedPage() {
               />
             </div>
 
-            {loading && (
+            {isProcessing && (
               <div className="flex items-center gap-2 mb-3 text-sm text-violet-600">
                 <div className="w-4 h-4 border-2 border-violet-600 border-t-transparent rounded-full animate-spin"></div>
                 {loadingStep}
@@ -413,7 +374,7 @@ export default function CombinedPage() {
 
             <button
               onClick={analyzeAll}
-              disabled={loading}
+              disabled={isProcessing}
               className="w-full bg-violet-600 text-white rounded-lg py-3 text-sm font-medium hover:bg-violet-700 disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {loading ? loadingStep : `Аналізувати — ${TOUCH_LABELS[touchType]}`}
@@ -442,19 +403,14 @@ export default function CombinedPage() {
                     </span>
                     <span className="text-gray-300">/10</span>
                   </div>
-                  {/* Speaker stats in result header */}
-                  {hasMultipleSpeakers && (
-                    <div className="flex gap-3 mt-2">
-                      {speakers.map(speaker => {
-                        const stat = speakerStats[speaker]
-                        const role = speakerRoles[speaker]
-                        const label = role === 'manager' ? (managerName || 'Менеджер') : role === 'student' ? (studentName || 'Студент') : `Мовець ${speaker}`
-                        return (
-                          <span key={speaker} className={`text-xs px-2 py-0.5 rounded-full ${role === 'manager' ? 'bg-violet-100 text-violet-700' : role === 'student' ? 'bg-teal-100 text-teal-700' : 'bg-gray-100 text-gray-500'}`}>
-                            {label}: {stat.percent}%
-                          </span>
-                        )
-                      })}
+                  {diarize && (
+                    <div className="flex gap-2 mt-2">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">
+                        {managerName || 'Менеджер'}: {diarize.managerPercent}%
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-teal-100 text-teal-700">
+                        {studentName || 'Студент'}: {diarize.studentPercent}%
+                      </span>
                     </div>
                   )}
                 </div>
@@ -481,11 +437,9 @@ export default function CombinedPage() {
                       Завантажити фідбек .zip
                     </button>
                   )}
-                  {htmlError && (
-                    <span className="text-xs text-red-500">{htmlError}</span>
-                  )}
+                  {htmlError && <span className="text-xs text-red-500">{htmlError}</span>}
                   <button
-                    onClick={() => { setResult(null); setFeedbackHtml(null); setTranscript(''); setCallUrl(''); setUtterances([]); setSpeakerStats({}); setSpeakerRoles({}) }}
+                    onClick={() => { setResult(null); setFeedbackHtml(null); setTranscript(''); setCallUrl(''); setDiarize(null) }}
                     className="text-sm px-3 py-1.5 border border-gray-200 rounded-lg text-gray-500 hover:text-gray-700"
                   >
                     Новий аналіз
