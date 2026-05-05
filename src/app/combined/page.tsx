@@ -38,6 +38,7 @@ export default function CombinedPage() {
   const [transcript, setTranscript] = useState('')
   const [diarize, setDiarize] = useState<DiarizeResult | null>(null)
   const [diarizing, setDiarizing] = useState(false)
+  const [diarizeError, setDiarizeError] = useState(false)
   const [managerName, setManagerName] = useState('')
   const [studentName, setStudentName] = useState('')
   const [sessionDate, setSessionDate] = useState('')
@@ -53,6 +54,7 @@ export default function CombinedPage() {
   async function runDiarize(text: string) {
     if (text.length < 100) return
     setDiarizing(true)
+    setDiarizeError(false)
     try {
       const res = await fetch('/api/diarize', {
         method: 'POST',
@@ -60,9 +62,13 @@ export default function CombinedPage() {
         body: JSON.stringify({ transcript: text, managerName, studentName }),
       })
       const data = await res.json()
-      if (!data.error && data.utterances?.length) setDiarize(data)
+      if (!data.error && data.utterances?.length) {
+        setDiarize(data)
+      } else {
+        setDiarizeError(true)
+      }
     } catch {
-      // diarization is optional — silently ignore
+      setDiarizeError(true)
     }
     setDiarizing(false)
   }
@@ -367,15 +373,22 @@ export default function CombinedPage() {
 
             <div className="mb-4">
               <label className="text-xs text-gray-500 mb-1 block">
-                Транскрипт {transcript && <span className="text-teal-600">✓ готово ({transcript.length} символів)</span>}
+                Транскрипт{' '}
+                {transcript && !diarize && <span className="text-teal-600">✓ готово ({transcript.length} символів)</span>}
+                {diarize && <span className="text-teal-600">✓ з розміткою мовців ({diarize.utterances.length} реплік)</span>}
                 {diarizing && <span className="text-violet-500 ml-2">· Визначаємо мовців...</span>}
+                {diarizeError && !diarizing && <span className="text-amber-500 ml-2">· Не вдалось визначити мовців (транскрипт збережено)</span>}
               </label>
               <textarea
-                value={transcript}
-                onChange={e => setTranscript(e.target.value)}
-                rows={transcript ? 6 : 3}
+                value={
+                  diarize?.utterances?.length
+                    ? buildLabeledTranscript(diarize.utterances, managerName, studentName)
+                    : transcript
+                }
+                onChange={e => { setTranscript(e.target.value); setDiarize(null); setDiarizeError(false) }}
+                rows={transcript ? 8 : 3}
                 placeholder="Транскрипт з'явиться тут після обробки, або вставте вручну..."
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-400 resize-none"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-violet-400 resize-none font-mono"
               />
             </div>
 
