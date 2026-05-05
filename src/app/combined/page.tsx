@@ -85,50 +85,51 @@ export default function CombinedPage() {
     try {
       const googleMatch = url.match(/drive\.google\.com\/file\/d\/([^/]+)/)
 
+      let uploadUrl: string
+
       if (googleMatch) {
         const fileId = googleMatch[1]
         const downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`
         const fileRes = await fetch(`/api/proxy-download?url=${encodeURIComponent(downloadUrl)}`)
+        if (!fileRes.ok) throw new Error(`Proxy download failed: ${fileRes.status}`)
         const blob = await fileRes.blob()
+        if (blob.size === 0) throw new Error('Файл порожній або недоступний')
 
         const keyRes = await fetch('/api/assemblyai-key')
         const { key } = await keyRes.json()
+        if (!key) throw new Error('AssemblyAI key missing')
 
         const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
           method: 'POST',
           headers: { authorization: key, 'content-type': 'application/octet-stream' },
           body: blob,
         })
+        if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`)
         const uploadData = await uploadRes.json()
-
-        setLoadingStep('Транскрибуємо дзвінок...')
-        const res = await fetch('/api/transcribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: uploadData.upload_url }),
-        })
-        const data = await res.json()
-        if (data.error) throw new Error(data.error)
-        const text = await pollUntilDone(data.jobId)
-        setTranscript(text)
-        setLoadingStep('Визначаємо мовців...')
-        await runDiarize(text)
+        if (!uploadData.upload_url) throw new Error('No upload_url returned')
+        uploadUrl = uploadData.upload_url
       } else {
-        setLoadingStep('Транскрибуємо дзвінок...')
-        const res = await fetch('/api/transcribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url }),
-        })
-        const data = await res.json()
-        if (data.error) throw new Error(data.error)
-        const text = await pollUntilDone(data.jobId)
-        setTranscript(text)
-        setLoadingStep('Визначаємо мовців...')
-        await runDiarize(text)
+        uploadUrl = url
       }
-    } catch {
-      setError('Помилка транскрибування. Спробуйте ще раз.')
+
+      setLoadingStep('Транскрибуємо дзвінок...')
+      const res = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: uploadUrl }),
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      if (!data.jobId) throw new Error('No jobId returned')
+
+      setLoadingStep('Транскрибуємо... (~1-3 хв)')
+      const text = await pollUntilDone(data.jobId)
+      if (!text) throw new Error('Empty transcript')
+      setTranscript(text)
+      setLoadingStep('Визначаємо мовців...')
+      await runDiarize(text)
+    } catch (e: any) {
+      setError(`Помилка: ${e.message}`)
     }
     setLoading(false)
     setLoadingStep('')
@@ -142,13 +143,16 @@ export default function CombinedPage() {
     try {
       const keyRes = await fetch('/api/assemblyai-key')
       const { key } = await keyRes.json()
+      if (!key) throw new Error('AssemblyAI key missing')
 
       const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
         method: 'POST',
         headers: { authorization: key, 'content-type': 'application/octet-stream' },
         body: file,
       })
+      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`)
       const uploadData = await uploadRes.json()
+      if (!uploadData.upload_url) throw new Error('No upload_url returned')
 
       setLoadingStep('Транскрибуємо аудіо...')
       const res = await fetch('/api/transcribe', {
@@ -158,12 +162,16 @@ export default function CombinedPage() {
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
+      if (!data.jobId) throw new Error('No jobId returned')
+
+      setLoadingStep('Транскрибуємо... (~1-3 хв)')
       const text = await pollUntilDone(data.jobId)
+      if (!text) throw new Error('Empty transcript')
       setTranscript(text)
       setLoadingStep('Визначаємо мовців...')
       await runDiarize(text)
-    } catch {
-      setError('Помилка транскрибування.')
+    } catch (e: any) {
+      setError(`Помилка: ${e.message}`)
     }
     setLoading(false)
     setLoadingStep('')
