@@ -9,40 +9,52 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'No transcript' }, { status: 400 })
   }
 
-  const prompt = `Ти аналізуєш транскрипт телефонного/zoom дзвінка між менеджером школи і студентом.
-Менеджер: ${managerName || 'невідомо'}
-Студент: ${studentName || 'невідомо'}
+  const mgrLabel = managerName || 'Менеджер'
+  const stdLabel = studentName || 'Студент'
 
-Розбий транскрипт на репліки і визнач хто говорить — менеджер чи студент.
-Менеджер зазвичай ставить питання, веде розмову, пропонує рішення.
-Студент відповідає, ділиться відчуттями, описує свій прогрес.
+  const prompt = `Ти аналізуєш транскрипт дзвінка між менеджером і студентом школи.
+Менеджер (${mgrLabel}) веде розмову, ставить питання, пропонує рішення.
+Студент (${stdLabel}) відповідає, ділиться враженнями, описує прогрес.
 
-Відповідай ТІЛЬКИ JSON без markdown:
-{
-  "utterances": [
-    { "speaker": "manager", "text": "текст репліки" },
-    { "speaker": "student", "text": "текст репліки" }
-  ],
-  "managerPercent": 60,
-  "studentPercent": 40
-}
+Розбий транскрипт на репліки і познач кожну. Відповідай ТІЛЬКИ рядками у такому форматі:
+[${mgrLabel}]: текст репліки
+[${stdLabel}]: текст репліки
+
+Без JSON, без markdown, без пояснень — тільки розмічені рядки.
 
 ТРАНСКРИПТ:
-${transcript.slice(0, 12000)}`
+${transcript.slice(0, 15000)}`
 
   try {
     const msg = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 4000,
+      max_tokens: 8000,
       messages: [{ role: 'user', content: prompt }],
     })
 
     const raw = msg.content.map((c: any) => c.type === 'text' ? c.text : '').join('')
-    const match = raw.replace(/```json|```/g, '').trim().match(/\{[\s\S]*\}/)
-    if (!match) throw new Error('No JSON')
-    const data = JSON.parse(match[0])
 
-    return NextResponse.json(data)
+    const utterances: { speaker: 'manager' | 'student'; text: string }[] = []
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith(`[${mgrLabel}]:`)) {
+        utterances.push({ speaker: 'manager', text: trimmed.replace(`[${mgrLabel}]:`, '').trim() })
+      } else if (trimmed.startsWith(`[${stdLabel}]:`)) {
+        utterances.push({ speaker: 'student', text: trimmed.replace(`[${stdLabel}]:`, '').trim() })
+      }
+    }
+
+    if (!utterances.length) {
+      return NextResponse.json({ error: 'Could not parse utterances' }, { status: 422 })
+    }
+
+    const mgrChars = utterances.filter(u => u.speaker === 'manager').reduce((s, u) => s + u.text.length, 0)
+    const stdChars = utterances.filter(u => u.speaker === 'student').reduce((s, u) => s + u.text.length, 0)
+    const total = mgrChars + stdChars
+    const managerPercent = total > 0 ? Math.round((mgrChars / total) * 100) : 50
+    const studentPercent = 100 - managerPercent
+
+    return NextResponse.json({ utterances, managerPercent, studentPercent })
   } catch (err) {
     console.error('Diarize error:', err)
     return NextResponse.json({ error: 'Diarization failed' }, { status: 500 })
