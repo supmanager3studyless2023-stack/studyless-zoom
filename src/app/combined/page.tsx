@@ -67,6 +67,16 @@ export default function CombinedPage() {
     setDiarizing(false)
   }
 
+  async function pollUntilDone(jobId: string): Promise<string> {
+    while (true) {
+      await new Promise(r => setTimeout(r, 3000))
+      const res = await fetch(`/api/transcribe/status?id=${jobId}`)
+      const data = await res.json()
+      if (data.status === 'completed') return data.transcript
+      if (data.status === 'error') throw new Error(data.error || 'Transcription error')
+    }
+  }
+
   async function transcribeUrl(url: string) {
     setLoading(true)
     setDiarize(null)
@@ -99,11 +109,10 @@ export default function CombinedPage() {
         })
         const data = await res.json()
         if (data.error) throw new Error(data.error)
-        setTranscript(data.transcript)
-        setLoading(false)
-        setLoadingStep('')
+        const text = await pollUntilDone(data.jobId)
+        setTranscript(text)
         setLoadingStep('Визначаємо мовців...')
-        await runDiarize(data.transcript)
+        await runDiarize(text)
       } else {
         setLoadingStep('Транскрибуємо дзвінок...')
         const res = await fetch('/api/transcribe', {
@@ -113,11 +122,10 @@ export default function CombinedPage() {
         })
         const data = await res.json()
         if (data.error) throw new Error(data.error)
-        setTranscript(data.transcript)
-        setLoading(false)
-        setLoadingStep('')
+        const text = await pollUntilDone(data.jobId)
+        setTranscript(text)
         setLoadingStep('Визначаємо мовців...')
-        await runDiarize(data.transcript)
+        await runDiarize(text)
       }
     } catch {
       setError('Помилка транскрибування. Спробуйте ще раз.')
@@ -150,10 +158,10 @@ export default function CombinedPage() {
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
-      setTranscript(data.transcript)
-      setLoading(false)
+      const text = await pollUntilDone(data.jobId)
+      setTranscript(text)
       setLoadingStep('Визначаємо мовців...')
-      await runDiarize(data.transcript)
+      await runDiarize(text)
     } catch {
       setError('Помилка транскрибування.')
     }

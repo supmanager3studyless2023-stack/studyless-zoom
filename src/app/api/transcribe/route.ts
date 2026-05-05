@@ -9,13 +9,6 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY
 
-interface Utterance {
-  speaker: string
-  text: string
-  start: number
-  end: number
-}
-
 function convertGoogleDriveUrl(url: string): string {
   const match = url.match(/drive\.google\.com\/file\/d\/([^/]+)/)
   if (match) {
@@ -38,48 +31,7 @@ async function uploadAudio(audioBlob: Blob): Promise<string> {
   return data.upload_url
 }
 
-function calcSpeakerStats(utterances: Utterance[]): Record<string, { ms: number; percent: number }> {
-  const durations: Record<string, number> = {}
-  for (const u of utterances) {
-    durations[u.speaker] = (durations[u.speaker] || 0) + (u.end - u.start)
-  }
-  const total = Object.values(durations).reduce((a, b) => a + b, 0)
-  return Object.fromEntries(
-    Object.entries(durations).map(([speaker, ms]) => [
-      speaker,
-      { ms, percent: total > 0 ? Math.round((ms / total) * 100) : 0 },
-    ])
-  )
-}
-
-async function transcribeAudio(audioUrl: string): Promise<{ text: string; utterances: Utterance[] }> {
-  const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
-    method: 'POST',
-    headers: {
-      authorization: ASSEMBLYAI_API_KEY!,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      audio_url: audioUrl,
-      language_code: 'uk',
-    }),
-  })
-  const createData = await createRes.json()
-  console.log('AssemblyAI create response:', JSON.stringify(createData))
-  if (!createRes.ok) throw new Error(`Transcription request failed: ${JSON.stringify(createData)}`)
-
-  const { id } = createData
-  while (true) {
-    await new Promise(r => setTimeout(r, 3000))
-    const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${id}`, {
-      headers: { authorization: ASSEMBLYAI_API_KEY! },
-    })
-    const result = await pollRes.json()
-    if (result.status === 'completed') return { text: result.text, utterances: [] }
-    if (result.status === 'error') throw new Error(result.error)
-  }
-}
-
+// Just submits the job and returns jobId immediately — no polling, no timeout risk
 export async function POST(request: NextRequest) {
   const contentType = request.headers.get('content-type') || ''
   let audioUrl: string
@@ -97,12 +49,23 @@ export async function POST(request: NextRequest) {
       audioUrl = await uploadAudio(blob)
     }
 
-    const { text, utterances } = await transcribeAudio(audioUrl)
-    const speakerStats = calcSpeakerStats(utterances)
+    const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+      method: 'POST',
+      headers: {
+        authorization: ASSEMBLYAI_API_KEY!,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        audio_url: audioUrl,
+        language_code: 'uk',
+      }),
+    })
+    const createData = await createRes.json()
+    if (!createRes.ok) throw new Error(`AssemblyAI error: ${JSON.stringify(createData)}`)
 
-    return NextResponse.json({ transcript: text, utterances, speakerStats })
+    return NextResponse.json({ jobId: createData.id })
   } catch (err) {
-    console.error('AssemblyAI error:', err)
+    console.error('Transcribe submit error:', err)
     return NextResponse.json({ error: 'Transcription failed' }, { status: 500 })
   }
 }
