@@ -58,6 +58,7 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         audio_url: audioUrl,
         language_code: 'uk',
+        speech_models: ['universal-2'],
       }),
     })
     const createData = await createRes.json()
