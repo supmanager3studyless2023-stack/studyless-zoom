@@ -133,13 +133,17 @@ export async function GET(request: NextRequest) {
     avgScore: +(v.scoreSum / v.total).toFixed(2),
   }))
 
-  // Recent 20 analyses
-  const recent = analyses.slice(0, 20).map(r => ({
+  // Recent 50 analyses (with full details for expandable rows)
+  const recent = analyses.slice(0, 50).map(r => ({
     id: r.id,
     managerName: r.manager_name,
     studentName: r.student_name,
     touchType: r.touch_type,
     overallScore: r.overall_score,
+    overallComment: r.overall_comment,
+    criteria: r.criteria,
+    topStrengths: r.top_strengths,
+    topImprovements: r.top_improvements,
     sessionDate: r.session_date,
     createdAt: r.created_at,
   }))

@@ -21,7 +21,7 @@ export default function LoginPage() {
       setError('Невірний email або пароль')
       setLoading(false)
     } else {
-      router.push('/combined')
+      router.push('/dashboard')
       router.refresh()
     }
   }
