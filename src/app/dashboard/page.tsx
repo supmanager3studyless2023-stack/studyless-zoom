@@ -156,7 +156,7 @@ function AnalysesList({ analyses, showManager = false }: { analyses: any[]; show
               {row.studentName || '—'}
             </span>
             <span style={{ fontSize: 12, color: '#6b7280', background: '#f3f4f6', borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>
-              {TOUCH_LABELS[row.touchType] ?? row.touchType || '—'}
+              {TOUCH_LABELS[row.touchType] || row.touchType || '—'}
             </span>
             <span style={{ fontSize: 12, color: '#9ca3af', whiteSpace: 'nowrap' }}>
               {row.sessionDate || new Date(row.createdAt).toLocaleDateString('uk-UA')}
