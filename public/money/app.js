@@ -65,8 +65,10 @@ const S = {
   txs: [],
   tab: 'home',
   month: monthKey(new Date()),
-  filter: null,
   kind: 'all',
+  statCat: null,
+  statScroll: 0,
+  q: '',
   settings: Object.assign({ token: '', limit: 0, accounts: [], since: {}, lastSync: 0, rules: {}, customCats: [], v: 1 }, LS.get('settings', {})),
   debts: LS.get('debts', []),
   syncing: false,
@@ -101,7 +103,8 @@ function monthTxs() {
   return S.txs.filter((t) => monthKey(new Date(t.ts)) === S.month).sort((a, b) => b.ts - a.ts)
 }
 function render() {
-  const app = $('#app')
+  const app = $('#app'), y = window.scrollY
+  LS.set('ui', { tab: S.tab, month: S.month, kind: S.kind, statCat: S.statCat, at: Date.now() })
   if (S.tab === 'home') app.innerHTML = viewHome()
   else if (S.tab === 'stats') app.innerHTML = viewStats()
   else if (S.tab === 'debts') app.innerHTML = viewDebts()
@@ -109,6 +112,7 @@ function render() {
   app.insertAdjacentHTML('beforeend', `<button class="fab" data-act="add" aria-label="Додати">+</button>
     <nav class="tabs">${[['home', '🏠', 'Головна'], ['stats', '📊', 'Статистика'], ['debts', '💳', 'Борги'], ['settings', '⚙️', 'Налаштування']]
       .map(([id, i, n]) => `<button data-act="tab" data-v="${id}" class="${S.tab === id ? 'on' : ''}"><span>${i}</span>${n}</button>`).join('')}</nav>`)
+  window.scrollTo(0, y) // після збереження/видалення лишаємось там, де були
 }
 
 function monthHeader() {
@@ -135,30 +139,36 @@ function viewHome() {
     }
     limitHtml = `<div class="bar ${left < 0 ? 'over' : ''}"><i style="width:${pct}%"></i></div><div class="sub"><span>${hint}</span><span>з ${uah(limit)}</span></div>`
   }
-  let list = all
-  if (S.filter) list = list.filter((t) => t.cat === S.filter)
-  if (S.kind === 'out') list = list.filter((t) => t.amount < 0)
-  else if (S.kind === 'in') list = list.filter((t) => t.amount > 0)
+  return `${monthHeader()}
+    <div class="hero"><div class="lbl">Витрачено${isCur ? ` · сьогодні ${uah(today)}` : ''}</div><div class="big">${uah(spent)}</div>${limitHtml}
+    <div class="two" style="margin-top:14px"><div><div class="lbl">Надходження</div><div class="mini in">+${uah(income)}</div></div>
+      <div><div class="lbl">Баланс місяця</div><div class="mini ${income - spent < 0 ? 'neg' : 'in'}">${income - spent < 0 ? '−' : '+'}${uah(income - spent)}</div></div></div></div>
+    <div class="seg">${[['all', 'Усі'], ['out', 'Витрати'], ['in', 'Надходження']].map(([k, n]) => `<button data-act="kind" data-v="${k}" class="${S.kind === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+    <input class="field" id="search" type="search" placeholder="🔍 Пошук за назвою, категорією чи сумою" value="${esc(S.q)}">
+    <div id="txlist">${homeList()}</div>${S.settings.token ? `<div class="sync">${esc(S.syncMsg) || syncedLabel()} · <button data-act="sync" style="text-decoration:underline">оновити</button></div>` : ''}`
+}
+function dayGroups(list, kind) {
   const groups = []
   for (const t of list) {
     const k = dayKey(t.ts)
     if (!groups.length || groups[groups.length - 1].k !== k) groups.push({ k, items: [] })
     groups[groups.length - 1].items.push(t)
   }
-  const body = groups.map((g) => {
+  return groups.map((g) => {
     const sum = g.items.filter(counts).reduce((s, t) => s - t.amount, 0)
     const inSum = g.items.filter((t) => !t.ignore && t.amount > 0).reduce((s, t) => s + t.amount, 0)
-    const dsum = S.kind === 'in' ? (inSum ? '+' + uah(inSum) : '') : sum ? '−' + uah(sum) : ''
-    return `<div class="day"><span>${dayLabel(g.k)}</span><span>${dsum}</span></div>
-      <div class="list">${g.items.map(rowHtml).join('')}</div>`
-  }).join('') || `<div class="empty">Поки порожньо.<br>Натисни «+», щоб додати витрату${S.settings.token ? '' : ',<br>або підключи Monobank в налаштуваннях'}.</div>`
-  return `${monthHeader()}
-    <div class="hero"><div class="lbl">Витрачено${isCur ? ` · сьогодні ${uah(today)}` : ''}</div><div class="big">${uah(spent)}</div>${limitHtml}
-    <div class="two" style="margin-top:14px"><div><div class="lbl">Надходження</div><div class="mini in">+${uah(income)}</div></div>
-      <div><div class="lbl">Баланс місяця</div><div class="mini ${income - spent < 0 ? 'neg' : 'in'}">${income - spent < 0 ? '−' : '+'}${uah(income - spent)}</div></div></div></div>
-    <div class="seg">${[['all', 'Усі'], ['out', 'Витрати'], ['in', 'Надходження']].map(([k, n]) => `<button data-act="kind" data-v="${k}" class="${S.kind === k ? 'on' : ''}">${n}</button>`).join('')}</div>
-    ${S.filter ? `<div class="chips"><button class="chip on" data-act="clearfilter">${catOf(S.filter).ico} ${catOf(S.filter).name} ✕</button></div>` : ''}
-    ${body}${S.settings.token ? `<div class="sync">${esc(S.syncMsg) || syncedLabel()} · <button data-act="sync" style="text-decoration:underline">оновити</button></div>` : ''}`
+    const dsum = kind === 'in' ? (inSum ? '+' + uah(inSum) : '') : sum ? '−' + uah(sum) : ''
+    return `<div class="day"><span>${dayLabel(g.k)}</span><span>${dsum}</span></div><div class="list">${g.items.map(rowHtml).join('')}</div>`
+  }).join('')
+}
+function homeList() {
+  let list = monthTxs()
+  if (S.kind === 'out') list = list.filter((t) => t.amount < 0)
+  else if (S.kind === 'in') list = list.filter((t) => t.amount > 0)
+  const q = S.q.trim().toLowerCase().replace(',', '.')
+  if (q) list = list.filter((t) => [t.note, t.desc, catOf(t.cat).name, String(Math.abs(t.amount) / 100)].some((x) => String(x || '').toLowerCase().includes(q)))
+  return dayGroups(list, S.kind) || (q ? '<div class="empty">Нічого не знайдено.</div>'
+    : `<div class="empty">Поки порожньо.<br>Натисни «+», щоб додати витрату${S.settings.token ? '' : ',<br>або підключи Monobank в налаштуваннях'}.</div>`)
 }
 function syncedLabel() {
   if (S.syncing) return 'Оновлення…'
@@ -175,7 +185,19 @@ function rowHtml(t) {
     <div class="a ${t.amount > 0 ? 'in' : ''}">${t.amount > 0 ? '+' : '−'}${uah(t.amount)}</div></button>`
 }
 
+function viewCat() {
+  const c = catOf(S.statCat)
+  const list = monthTxs().filter((t) => t.cat === S.statCat)
+  const total = list.filter(counts).reduce((s, t) => s - t.amount, 0)
+  const inc = list.filter((t) => !t.ignore && t.amount > 0).reduce((s, t) => s + t.amount, 0)
+  const all = monthTxs().filter(counts).reduce((s, t) => s - t.amount, 0)
+  return `<button class="chip" data-act="catback" style="margin-bottom:8px">‹ Усі категорії</button>${monthHeader()}
+    <div class="hero"><div class="lbl">${esc(c.ico)} ${esc(c.name)}</div><div class="big">${uah(S.statCat === 'income' ? inc : total)}</div>
+    <div class="sub"><span>${list.length} операцій</span><span>${S.statCat !== 'income' && all ? Math.round((total / all) * 100) + '% від усіх витрат' : ''}</span></div></div>
+    ${dayGroups(list, S.statCat === 'income' ? 'in' : 'out') || '<div class="empty">У цій категорії немає операцій за місяць.</div>'}`
+}
 function viewStats() {
+  if (S.statCat) return viewCat()
   const all = monthTxs().filter(counts)
   const total = all.reduce((s, t) => s - t.amount, 0)
   const income = monthTxs().filter((t) => !t.ignore && t.amount > 0).reduce((s, t) => s + t.amount, 0)
@@ -184,7 +206,7 @@ function viewStats() {
   const rows = Object.entries(by).sort((a, b) => b[1] - a[1])
   const body = rows.map(([id, v]) => {
     const c = catOf(id), pct = total ? (v / total) * 100 : 0
-    return `<button class="cat" data-act="filter" data-v="${id}"><div class="ico">${c.ico}</div><div class="mid">
+    return `<button class="cat" data-act="statcat" data-v="${id}"><div class="ico">${c.ico}</div><div class="mid">
       <div class="top"><span>${c.name}</span><span>${uah(v)} · ${Math.round(pct)}%</span></div>
       <div class="bar"><i style="width:${pct}%;background:${c.color}"></i></div></div></button>`
   }).join('') || '<div class="empty">Немає витрат за цей місяць.</div>'
@@ -343,6 +365,7 @@ async function resizePhoto(file) {
 }
 
 async function saveForm() {
+  const form_isNew = form.isNew
   const raw = $('#amt').value.replace(/\s/g, '').replace(',', '.')
   const val = Math.round(parseFloat(raw) * 100)
   if (!val || val <= 0) { toast('Введи суму'); $('#amt').focus(); return }
@@ -367,7 +390,7 @@ async function saveForm() {
     toast(`Запам’ятав: ${t.desc} → ${catOf(t.cat).name}${n ? ` (ще ${n})` : ''}`)
   }
   if (t.ts) { const mk = monthKey(new Date(t.ts)); if (form.isNew && mk !== S.month) S.month = mk }
-  closeSheet(); render()
+  closeSheet(); render(); toast(form_isNew ? 'Додано' : 'Збережено')
 }
 
 // ---------- Monobank ----------
@@ -477,7 +500,7 @@ document.addEventListener('click', async (e) => {
   if (!el) { if (e.target.id === 'sheet') closeSheet(); return }
   const act = el.dataset.act, v = el.dataset.v
   switch (act) {
-    case 'tab': S.tab = v; render(); window.scrollTo(0, 0); break
+    case 'tab': if (S.tab === v) { window.scrollTo({ top: 0, behavior: 'smooth' }); break } S.tab = v; render(); window.scrollTo(0, 0); break
     case 'add': if (S.tab === 'debts') openDebtSheet(); else openSheet(); break
     case 'dedit': openDebtSheet(S.debts.find((d) => d.id === el.dataset.id)); break
     case 'dop': openDebtOp(S.debts.find((d) => d.id === el.dataset.id), v); break
@@ -495,11 +518,11 @@ document.addEventListener('click', async (e) => {
     case 'edit': openSheet(S.txs.find((t) => t.id === el.dataset.id)); break
     case 'mprev': case 'mnext': {
       const [y, m] = S.month.split('-').map(Number); const d = new Date(y, m - 1 + (act === 'mnext' ? 1 : -1), 1)
-      S.month = monthKey(d); render(); break
+      S.month = monthKey(d); render(); window.scrollTo(0, 0); break
     }
-    case 'filter': S.filter = v; S.tab = 'home'; render(); window.scrollTo(0, 0); break
+    case 'statcat': S.statScroll = window.scrollY; S.statCat = v; render(); window.scrollTo(0, 0); break
+    case 'catback': S.statCat = null; render(); window.scrollTo(0, S.statScroll); break
     case 'kind': S.kind = v; render(); break
-    case 'clearfilter': S.filter = null; render(); break
     case 'sync': sync(true); break
     case 'ftype': form.expense = v === 'e'; document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.v === v)); break
     case 'fcat': form.t.cat = v; document.querySelectorAll('.grid button').forEach((b) => b.classList.toggle('on', b.dataset.v === v)); break
@@ -544,6 +567,19 @@ document.addEventListener('change', async (e) => {
   else if (t.id === 'limit') { S.settings.limit = Math.max(0, parseInt(t.value, 10) || 0); saveSettings(); toast('Ліміт збережено') }
   else if (t.dataset && t.dataset.act === 'acc') { S.settings.accounts[+t.dataset.i].on = t.checked; saveSettings() }
 })
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'search') { S.q = e.target.value; $('#txlist').innerHTML = homeList() }
+})
+// свайп вліво/вправо змінює місяць
+let sx = 0, sy = 0
+document.addEventListener('touchstart', (e) => { sx = e.touches[0].clientX; sy = e.touches[0].clientY }, { passive: true })
+document.addEventListener('touchend', (e) => {
+  if ($('#sheet').classList.contains('open') || !['home', 'stats'].includes(S.tab)) return
+  const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy
+  if (Math.abs(dx) < 90 || Math.abs(dy) > 50) return
+  const btn = document.querySelector(dx > 0 ? '[data-act=mprev]' : '[data-act=mnext]')
+  if (btn && !btn.disabled) btn.click()
+}, { passive: true })
 document.addEventListener('keydown', (e) => { if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return
   if (form) saveForm(); else if (dform) (dform.op ? saveDebtOp() : saveDebt()) })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(false) })
@@ -552,6 +588,13 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) sync
 ;(async () => {
   try { db = await openDb(); S.txs = await dbAll() } catch { toast('Не вдалося відкрити сховище') }
   rebuildCats()
+  const ui = LS.get('ui', null)
+  if (ui && Date.now() - ui.at < 30 * 60000) { // швидке повернення в застосунок: лишаємось там, де були
+    if (['home', 'stats', 'debts', 'settings'].includes(ui.tab)) S.tab = ui.tab
+    if (/^\d{4}-\d{2}$/.test(ui.month)) S.month = ui.month
+    if (['all', 'in', 'out'].includes(ui.kind)) S.kind = ui.kind
+    if (ui.statCat && (CAT[ui.statCat])) S.statCat = ui.statCat
+  }
   if (S.settings.v < 2) {
     // раніше в імпорт могли потрапити рахунки ФОП: чистимо банківські операції без позначки рахунку й завантажуємо заново лише з особистих карток
     for (const t of S.txs.filter((t) => t.src === 'mono' && !t.acc)) await dbDel(t.id)
