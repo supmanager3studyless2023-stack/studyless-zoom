@@ -60,10 +60,12 @@ const S = {
   month: monthKey(new Date()),
   filter: null,
   settings: Object.assign({ token: '', limit: 0, accounts: [], since: {}, lastSync: 0, rules: {} }, LS.get('settings', {})),
+  debts: LS.get('debts', []),
   syncing: false,
   syncMsg: '',
 }
 const saveSettings = () => LS.set('settings', S.settings)
+const saveDebts = () => LS.set('debts', S.debts)
 
 // ---------- утиліти ----------
 const $ = (s, r = document) => r.querySelector(s)
@@ -94,9 +96,10 @@ function render() {
   const app = $('#app')
   if (S.tab === 'home') app.innerHTML = viewHome()
   else if (S.tab === 'stats') app.innerHTML = viewStats()
+  else if (S.tab === 'debts') app.innerHTML = viewDebts()
   else app.innerHTML = viewSettings()
   app.insertAdjacentHTML('beforeend', `<button class="fab" data-act="add" aria-label="Додати">+</button>
-    <nav class="tabs">${[['home', '🏠', 'Головна'], ['stats', '📊', 'Статистика'], ['settings', '⚙️', 'Налаштування']]
+    <nav class="tabs">${[['home', '🏠', 'Головна'], ['stats', '📊', 'Статистика'], ['debts', '💳', 'Борги'], ['settings', '⚙️', 'Налаштування']]
       .map(([id, i, n]) => `<button data-act="tab" data-v="${id}" class="${S.tab === id ? 'on' : ''}"><span>${i}</span>${n}</button>`).join('')}</nav>`)
 }
 
@@ -195,6 +198,87 @@ function viewSettings() {
     <div class="sync">Версія 1.0</div>`
 }
 
+
+// ---------- борги: розстрочка та кредитний ліміт ----------
+function nextPayDate(d) {
+  const now = new Date(); now.setHours(0, 0, 0, 0)
+  const at = (y, m) => new Date(y, m, Math.min(d.day, new Date(y, m + 1, 0).getDate()))
+  let t = at(now.getFullYear(), now.getMonth())
+  if (t < now) t = at(now.getFullYear(), now.getMonth() + 1)
+  return { t, days: Math.round((t - now) / 864e5) }
+}
+function viewDebts() {
+  const owed = S.debts.reduce((s, d) => s + d.balance, 0)
+  const pays = S.debts.filter((d) => d.kind === 'installment' && d.balance > 0 && d.day).map((d) => ({ d, ...nextPayDate(d) })).sort((a, b) => a.days - b.days)
+  const nxt = pays[0]
+  const when = (n) => (n === 0 ? 'сьогодні' : n === 1 ? 'завтра' : `через ${n} дн`)
+  const cards = S.debts.map((d) => {
+    const credit = d.kind === 'credit'
+    const pct = d.total ? Math.min(100, ((credit ? d.balance : d.total - d.balance) / d.total) * 100) : 0
+    const np = !credit && d.balance > 0 && d.day ? nextPayDate(d) : null
+    const log = (d.log || []).slice(-3).reverse().map((l) => `<div class="sub"><span>${new Date(l.ts).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}${l.note ? ' · ' + esc(l.note) : ''}</span><span>${l.delta < 0 ? '−' : '+'}${uah(l.delta)}</span></div>`).join('')
+    return `<div class="box" style="margin-bottom:12px">
+      <button class="row" style="padding:0 0 10px" data-act="dedit" data-id="${d.id}"><div class="ico">${credit ? '💳' : '🛍️'}</div>
+        <div class="mid"><div class="t">${esc(d.name)}</div><div class="s">${credit ? 'Кредитний ліміт' : 'Розстрочка'} · ✎</div></div>
+        <div class="a">${uah(d.balance)}</div></button>
+      <div class="bar ${credit && d.balance > d.total ? 'over' : ''}"><i style="width:${pct}%"></i></div>
+      <div class="sub"><span>${credit ? `Вільно ${uah(Math.max(0, d.total - d.balance))}` : d.balance > 0 ? `Погашено ${uah(d.total - d.balance)}` : 'Погашено 🎉'}</span><span>${credit ? 'ліміт' : 'з'} ${uah(d.total)}</span></div>
+      ${np ? `<div class="sub"><span>Платіж ${uah(d.monthly)} · ${np.t.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long' })}</span><span>${when(np.days)}</span></div>` : ''}
+      <div class="two" style="margin-top:12px"><button class="btn" data-act="dop" data-id="${d.id}" data-v="pay">Погасити</button>
+        ${credit ? `<button class="btn sec" data-act="dop" data-id="${d.id}" data-v="borrow" style="margin:0">Взяв ще</button>` : ''}</div>
+      ${log ? `<div style="margin-top:8px">${log}</div>` : ''}</div>`
+  }).join('') || '<div class="empty">Тут можна вести розстрочку й кредитний ліміт.<br>Натисни «+», щоб додати.</div>'
+  return `<div class="head"><div class="month">Борги</div></div>
+    <div class="hero"><div class="lbl">Загалом винен</div><div class="big">${uah(owed)}</div>
+    ${nxt ? `<div class="sub"><span>Найближчий платіж: ${esc(nxt.d.name)} ${uah(nxt.d.monthly)}</span><span>${when(nxt.days)}</span></div>` : ''}</div>${cards}`
+}
+
+let dform = null
+function openDebtSheet(d) {
+  const isNew = !d
+  dform = { d: d ? { ...d } : { id: 'd:' + Date.now().toString(36), kind: 'installment', name: '', total: 0, balance: 0, monthly: 0, day: 0, log: [] }, isNew, op: null }
+  const x = dform.d, inst = x.kind === 'installment'
+  $('#sheet').innerHTML = `<div class="panel">
+    <div class="seg"><button data-act="dkind" data-v="installment" class="${inst ? 'on' : ''}">Розстрочка</button><button data-act="dkind" data-v="credit" class="${inst ? '' : 'on'}">Кредитний ліміт</button></div>
+    <input class="field" id="dname" placeholder="Назва (напр. Магазин / Mono кредитка)" value="${esc(x.name)}">
+    <input class="field" id="dtotal" inputmode="decimal" placeholder="${inst ? 'Загальна сума розстрочки' : 'Кредитний ліміт'}" value="${x.total ? x.total / 100 : ''}">
+    <input class="field" id="dbal" inputmode="decimal" placeholder="${inst ? 'Залишок до сплати (якщо вже платив)' : 'Використано зараз'}" value="${!isNew ? x.balance / 100 : ''}">
+    <div class="two" id="dinst" style="${inst ? '' : 'display:none'}"><input class="field" id="dmonthly" inputmode="decimal" placeholder="Щомісячний платіж" value="${x.monthly ? x.monthly / 100 : ''}">
+      <input class="field" id="dday" inputmode="numeric" placeholder="День платежу (1–31)" value="${x.day || ''}"></div>
+    <button class="btn" data-act="dsave">Зберегти</button>
+    ${!isNew ? '<button class="btn del" data-act="ddel">Видалити</button>' : ''}<button class="btn sec" data-act="fclose">Закрити</button></div>`
+  $('#sheet').classList.add('open')
+}
+function openDebtOp(d, op) {
+  dform = { d, op }
+  $('#sheet').innerHTML = `<div class="panel"><div class="lbl" style="color:var(--muted);text-align:center">${op === 'pay' ? 'Погашення' : 'Використано ще'} · ${esc(d.name)}</div>
+    <input class="amt" id="damt" type="text" inputmode="decimal" placeholder="0" value="${op === 'pay' && d.monthly ? Math.min(d.monthly, d.balance) / 100 : ''}">
+    <input class="field" id="dnote" placeholder="Нотатка (необов’язково)">
+    <button class="btn" data-act="dopsave">Зберегти</button><button class="btn sec" data-act="fclose">Закрити</button></div>`
+  $('#sheet').classList.add('open')
+  setTimeout(() => $('#damt')?.focus(), 60)
+}
+const kop = (id) => Math.round(parseFloat(($(id).value || '').replace(/\s/g, '').replace(',', '.')) * 100) || 0
+function saveDebt() {
+  const x = dform.d
+  x.name = $('#dname').value.trim(); x.total = kop('#dtotal')
+  if (!x.name || x.total <= 0) { toast('Введи назву і суму'); return }
+  const bal = $('#dbal').value.trim()
+  x.balance = bal === '' ? (dform.isNew ? x.total : x.balance) : kop('#dbal')
+  if (x.kind === 'installment') { x.monthly = kop('#dmonthly'); x.day = Math.min(31, Math.max(0, parseInt($('#dday').value, 10) || 0)) } else { x.monthly = 0; x.day = 0 }
+  const i = S.debts.findIndex((o) => o.id === x.id)
+  if (i >= 0) S.debts[i] = x; else S.debts.push(x)
+  saveDebts(); closeSheet(); render()
+}
+function saveDebtOp() {
+  const v = kop('#damt'); if (v <= 0) { toast('Введи суму'); return }
+  const { d, op } = dform
+  const delta = op === 'pay' ? -Math.min(v, d.balance) : v
+  d.balance += delta; d.log = [...(d.log || []), { ts: Date.now(), delta, note: $('#dnote').value.trim() }]
+  saveDebts(); closeSheet(); render()
+  if (d.balance === 0) toast(d.kind === 'credit' ? 'Ліміт повністю погашено 🎉' : 'Розстрочку погашено 🎉')
+}
+
 // ---------- форма додавання/редагування ----------
 let form = null
 function openSheet(tx) {
@@ -216,9 +300,9 @@ function openSheet(tx) {
     <div style="margin-top:12px"><button class="btn" data-act="fsave">Зберегти</button>
     ${!isNew ? '<button class="btn del" data-act="fdel">Видалити</button>' : ''}<button class="btn sec" data-act="fclose">Закрити</button></div></div>`
   sheet.classList.add('open')
-  if (isNew) setTimeout(() => $('#amt').focus(), 60)
+  if (isNew) setTimeout(() => $('#amt')?.focus(), 60)
 }
-const closeSheet = () => { $('#sheet').classList.remove('open'); $('#sheet').innerHTML = ''; form = null }
+const closeSheet = () => { $('#sheet').classList.remove('open'); $('#sheet').innerHTML = ''; form = null; dform = null }
 
 async function resizePhoto(file) {
   const bmp = await createImageBitmap(file)
@@ -328,7 +412,7 @@ async function exportData() {
   const txs = []
   for (const t of S.txs) txs.push({ ...t, photo: t.photo ? await blobToData(t.photo) : undefined })
   const s = { ...S.settings, token: '' }
-  const file = new File([JSON.stringify({ v: 1, txs, settings: s })], `hroshi-${dayKey(Date.now())}.json`, { type: 'application/json' })
+  const file = new File([JSON.stringify({ v: 1, txs, settings: s, debts: S.debts })], `hroshi-${dayKey(Date.now())}.json`, { type: 'application/json' })
   if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file] }); return } catch { return } }
   const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; a.click()
 }
@@ -342,6 +426,7 @@ async function importData(file) {
     }
     S.txs = await dbAll()
     if (d.settings) { S.settings = { ...S.settings, limit: d.settings.limit || S.settings.limit, rules: { ...S.settings.rules, ...d.settings.rules } }; saveSettings() }
+    if (Array.isArray(d.debts)) { S.debts = d.debts; saveDebts() }
     toast(`Відновлено: ${d.txs.length}`); render()
   } catch { toast('Файл не підійшов') }
 }
@@ -353,7 +438,20 @@ document.addEventListener('click', async (e) => {
   const act = el.dataset.act, v = el.dataset.v
   switch (act) {
     case 'tab': S.tab = v; render(); window.scrollTo(0, 0); break
-    case 'add': openSheet(); break
+    case 'add': if (S.tab === 'debts') openDebtSheet(); else openSheet(); break
+    case 'dedit': openDebtSheet(S.debts.find((d) => d.id === el.dataset.id)); break
+    case 'dop': openDebtOp(S.debts.find((d) => d.id === el.dataset.id), v); break
+    case 'dkind': {
+      const inst = v === 'installment'; dform.d.kind = v
+      document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.v === v))
+      $('#dinst').style.display = inst ? '' : 'none'
+      $('#dtotal').placeholder = inst ? 'Загальна сума розстрочки' : 'Кредитний ліміт'
+      $('#dbal').placeholder = inst ? 'Залишок до сплати (якщо вже платив)' : 'Використано зараз'
+      break
+    }
+    case 'dsave': saveDebt(); break
+    case 'dopsave': saveDebtOp(); break
+    case 'ddel': if (confirm('Видалити?')) { S.debts = S.debts.filter((d) => d.id !== dform.d.id); saveDebts(); closeSheet(); render() } break
     case 'edit': openSheet(S.txs.find((t) => t.id === el.dataset.id)); break
     case 'mprev': case 'mnext': {
       const [y, m] = S.month.split('-').map(Number); const d = new Date(y, m - 1 + (act === 'mnext' ? 1 : -1), 1)
@@ -391,7 +489,8 @@ document.addEventListener('change', async (e) => {
   else if (t.id === 'limit') { S.settings.limit = Math.max(0, parseInt(t.value, 10) || 0); saveSettings(); toast('Ліміт збережено') }
   else if (t.dataset && t.dataset.act === 'acc') { S.settings.accounts[+t.dataset.i].on = t.checked; saveSettings() }
 })
-document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && form && e.target.tagName === 'INPUT') saveForm() })
+document.addEventListener('keydown', (e) => { if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return
+  if (form) saveForm(); else if (dform) (dform.op ? saveDebtOp() : saveDebt()) })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(false) })
 
 // ---------- старт ----------
