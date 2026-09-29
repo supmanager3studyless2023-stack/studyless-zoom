@@ -90,7 +90,8 @@ function dayLabel(key) {
   if (key === yest) return 'Вчора'
   return new Date(key + 'T12:00').toLocaleDateString('uk-UA', { weekday: 'short', day: 'numeric', month: 'long' })
 }
-const counts = (t) => !t.ignore && t.amount < 0
+const active = (t) => !t.ignore && !t.own // переказ між своїми картками не є ні витратою, ні надходженням
+const counts = (t) => active(t) && t.amount < 0
 function toast(msg) {
   const el = $('#toast'); el.textContent = msg; el.classList.add('show')
   clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove('show'), 2600)
@@ -124,7 +125,7 @@ function monthHeader() {
 function viewHome() {
   const all = monthTxs()
   const spent = all.filter(counts).reduce((s, t) => s - t.amount, 0)
-  const income = all.filter((t) => !t.ignore && t.amount > 0).reduce((s, t) => s + t.amount, 0)
+  const income = all.filter((t) => active(t) && t.amount > 0).reduce((s, t) => s + t.amount, 0)
   const isCur = S.month === monthKey(new Date())
   const today = isCur ? S.txs.filter((t) => counts(t) && dayKey(t.ts) === dayKey(Date.now())).reduce((s, t) => s - t.amount, 0) : 0
   const limit = S.settings.limit * 100
@@ -163,7 +164,7 @@ function dayGroups(list, kind) {
   }
   return groups.map((g) => {
     const sum = g.items.filter(counts).reduce((s, t) => s - t.amount, 0)
-    const inSum = g.items.filter((t) => !t.ignore && t.amount > 0).reduce((s, t) => s + t.amount, 0)
+    const inSum = g.items.filter((t) => active(t) && t.amount > 0).reduce((s, t) => s + t.amount, 0)
     const dsum = kind === 'in' ? (inSum ? '+' + uah(inSum) : '') : sum ? '−' + uah(sum) : ''
     return `<div class="day"><span>${dayLabel(g.k)}</span><span>${dsum}</span></div><div class="list">${g.items.map(rowHtml).join('')}</div>`
   }).join('')
@@ -186,9 +187,9 @@ function syncedLabel() {
 function rowHtml(t) {
   const c = catOf(t.cat)
   const title = t.note || t.desc || c.name
-  return `<button class="row ${t.ignore ? 'ign' : ''}" data-act="edit" data-id="${esc(t.id)}">
+  return `<button class="row ${t.ignore || t.own ? 'ign' : ''}" data-act="edit" data-id="${esc(t.id)}">
     <div class="ico">${c.ico}</div>
-    <div class="mid"><div class="t">${esc(title)}</div><div class="s">${c.name} · ${t.src === 'mono' ? 'картка' : 'готівка'}${t.photo ? ' · 📎' : ''}${t.ignore ? ' · не враховано' : ''}</div></div>
+    <div class="mid"><div class="t">${esc(title)}</div><div class="s">${c.name} · ${t.src === 'mono' ? 'картка' : 'готівка'}${t.photo ? ' · 📎' : ''}${t.own ? ' · між своїми картками' : t.ignore ? ' · не враховано' : ''}</div></div>
     <div class="a ${t.amount > 0 ? 'in' : ''}">${t.amount > 0 ? '+' : '−'}${uah(t.amount)}</div></button>`
 }
 
@@ -196,7 +197,7 @@ function viewCat() {
   const c = catOf(S.statCat)
   const list = monthTxs().filter((t) => t.cat === S.statCat)
   const total = list.filter(counts).reduce((s, t) => s - t.amount, 0)
-  const inc = list.filter((t) => !t.ignore && t.amount > 0).reduce((s, t) => s + t.amount, 0)
+  const inc = list.filter((t) => active(t) && t.amount > 0).reduce((s, t) => s + t.amount, 0)
   const all = monthTxs().filter(counts).reduce((s, t) => s - t.amount, 0)
   return `<button class="chip" data-act="catback" style="margin-bottom:8px">‹ Усі категорії</button>${monthHeader()}
     <div class="hero"><div class="lbl">${esc(c.ico)} ${esc(c.name)}</div><div class="big">${uah(S.statCat === 'income' ? inc : total)}</div>
@@ -231,7 +232,7 @@ function viewStats() {
   if (S.statCat) return viewCat()
   const all = monthTxs().filter(counts)
   const total = all.reduce((s, t) => s - t.amount, 0)
-  const income = monthTxs().filter((t) => !t.ignore && t.amount > 0).reduce((s, t) => s + t.amount, 0)
+  const income = monthTxs().filter((t) => active(t) && t.amount > 0).reduce((s, t) => s + t.amount, 0)
   const by = {}
   for (const t of all) by[t.cat] = (by[t.cat] || 0) - t.amount
   const rows = Object.entries(by).sort((a, b) => b[1] - a[1])
@@ -323,6 +324,8 @@ function openDebtSheet(d) {
     <input class="field" id="dbal" inputmode="decimal" placeholder="${inst ? 'Залишок до сплати (якщо вже платив)' : 'Використано зараз'}" value="${!isNew ? x.balance / 100 : ''}">
     <div class="two" id="dinst" style="${inst ? '' : 'display:none'}"><input class="field" id="dmonthly" inputmode="decimal" placeholder="Щомісячний платіж" value="${x.monthly ? x.monthly / 100 : ''}">
       <input class="field" id="dday" inputmode="numeric" placeholder="День платежу (1–31)" value="${x.day || ''}"></div>
+    <div id="dcredit" style="${inst ? 'display:none' : ''}"><select class="field" id="dacc"><option value="">Картка з кредитним лімітом (необов’язково)</option>${S.settings.accounts.map((a) => `<option value="${esc(a.id)}" ${x.acc === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
+      <p style="color:var(--muted);font-size:13px;margin:-4px 4px 10px">Якщо обрати картку, то переказ на неї з іншої твоєї картки сам зменшить борг.</p></div>
     <div id="dinst2" style="${inst ? '' : 'display:none'}"><input class="field" id="dkey" placeholder="Як платіж називається в банку (для автосписання)" value="${esc(x.key || '')}">
       <p style="color:var(--muted);font-size:13px;margin:-4px 4px 10px">Напр. назва магазину з виписки Monobank. Тоді нові платежі з цією назвою самі зменшать борг.</p></div>
     <button class="btn" data-act="dsave">Зберегти</button>
@@ -345,7 +348,7 @@ function saveDebt() {
   if (!x.name || x.total <= 0) { toast('Введи назву і суму'); return }
   const bal = $('#dbal').value.trim()
   x.balance = bal === '' ? (dform.isNew ? x.total : x.balance) : kop('#dbal')
-  if (x.kind === 'installment') { x.key = $('#dkey').value.trim(); x.monthly = kop('#dmonthly'); x.day = Math.min(31, Math.max(0, parseInt($('#dday').value, 10) || 0)) } else { x.monthly = 0; x.day = 0 }
+  if (x.kind === 'installment') { x.key = $('#dkey').value.trim(); x.monthly = kop('#dmonthly'); x.day = Math.min(31, Math.max(0, parseInt($('#dday').value, 10) || 0)); x.acc = '' } else { x.monthly = 0; x.day = 0; x.acc = $('#dacc').value }
   const i = S.debts.findIndex((o) => o.id === x.id)
   if (i >= 0) S.debts[i] = x; else S.debts.push(x)
   saveDebts(); closeSheet(); render()
@@ -385,7 +388,8 @@ function openSheet(tx) {
       <button class="btn sec" data-act="fphoto" style="margin:0" id="photobtn">${form.photo ? '📎 Чек додано' : '📷 Фото чека'}</button></div>
     <input type="file" id="photofile" accept="image/*" capture="environment" hidden>
     <div id="photoprev">${form.photo ? `<img class="photo" style="margin-top:10px" src="${URL.createObjectURL(form.photo)}">` : ''}</div>
-    ${!isNew ? `<label class="tog"><span>Не враховувати в статистиці</span><input type="checkbox" id="ign" ${t.ignore ? 'checked' : ''}></label>` : ''}
+    ${!isNew ? `<label class="tog"><span>Переказ між моїми картками</span><input type="checkbox" id="own" ${t.own ? 'checked' : ''}></label>
+    <label class="tog"><span>Не враховувати в статистиці</span><input type="checkbox" id="ign" ${t.ignore ? 'checked' : ''}></label>` : ''}
     <div style="margin-top:12px"><button class="btn" data-act="fsave">Зберегти</button>
     ${!isNew ? '<button class="btn del" data-act="fdel">Видалити</button>' : ''}<button class="btn sec" data-act="fclose">Закрити</button></div></div>`
   sheet.classList.add('open')
@@ -411,6 +415,9 @@ async function saveForm() {
   t.note = $('#note').value.trim()
   const d = new Date($('#date').value); if (!isNaN(d)) t.ts = d.getTime()
   t.ignore = $('#ign') ? $('#ign').checked : false
+  const wasOwn = !!t.own
+  t.own = $('#own') ? $('#own').checked : false
+  if (t.own && !wasOwn) { t.cat = 'transfer'; applyOwnTransfer(t) }
   if (!form.expense) t.cat = 'income'
   else if (t.cat === 'income') t.cat = 'other'
   if (form.photo) t.photo = form.photo; else delete t.photo
@@ -463,6 +470,33 @@ async function loadAccounts() {
   saveSettings()
 }
 
+// Переказ між своїми картками: витрата на одній картці й надходження тієї ж суми на іншій майже одночасно
+function applyOwnTransfer(x) {
+  if (x.amount <= 0 || !x.acc || x.debtApplied) return false
+  const d = S.debts.find((y) => y.kind === 'credit' && y.acc === x.acc && y.balance > 0)
+  if (!d) return false
+  const delta = -Math.min(x.amount, d.balance)
+  d.balance += delta; d.log = [...(d.log || []), { ts: x.ts, delta, note: 'переказ зі своєї картки', tx: x.id }]
+  x.debtApplied = true
+  saveDebts()
+  return true
+}
+async function markTransfers(cands, autoDebt) {
+  const pool = S.txs.filter((t) => t.src === 'mono' && t.acc && !t.own)
+  let n = 0, repaid = 0
+  for (const t of cands) {
+    if (t.own || t.src !== 'mono' || !t.acc) continue
+    const m = pool.find((o) => o !== t && !o.own && o.acc !== t.acc && o.amount === -t.amount && Math.abs(o.ts - t.ts) <= 5 * 60000)
+    if (!m) continue
+    for (const x of [t, m]) {
+      x.own = true; x.cat = 'transfer'
+      if (autoDebt && applyOwnTransfer(x)) repaid++
+      await dbPut(x)
+    }
+    n++
+  }
+  return { n, repaid }
+}
 // нова банківська витрата з назвою з поля «Як платіж називається в банку» зменшує залишок розстрочки
 function applyDebtPayment(t) {
   if (t.amount >= 0 || !t.desc) return false
@@ -486,6 +520,7 @@ async function stmt(path) {
 }
 async function fetchWindow(a, from, to, autoDebt) {
   let added = 0, autoPaid = 0
+  const fresh = []
   for (;;) {
     const items = await stmt(`/personal/statement/${a.id}/${from}/${to}`)
     for (const it of items) {
@@ -496,13 +531,13 @@ async function fetchWindow(a, from, to, autoDebt) {
         id, acc: a.id, ts: it.time * 1000, amount: it.amount, src: 'mono', desc: it.description || '', note: it.comment || '',
         mcc: it.mcc, cat: it.amount > 0 ? 'income' : rule || mccToCat(it.mcc),
       }
-      await dbPut(t); S.txs.push(t); added++
+      await dbPut(t); S.txs.push(t); added++; fresh.push(t)
       if (autoDebt && applyDebtPayment(t)) autoPaid++
     }
     if (items.length < 500) break
     to = items[items.length - 1].time
   }
-  return { added, autoPaid }
+  return { added, autoPaid, fresh }
 }
 const bankError = (e) => e.message === 'rate' ? 'Забагато запитів до банку, спробуй за хвилину'
   : e.message === 'token' ? 'Токен не підійшов — перевір у налаштуваннях' : 'Не вдалося зв’язатись з банком'
@@ -514,17 +549,19 @@ async function sync(force) {
   try {
     if (!S.settings.accounts.length) { await loadAccounts(); await sleep(1000) }
     let added = 0, autoPaid = 0
+    const fresh = []
     for (const a of S.settings.accounts.filter((a) => a.on)) {
       const to = Math.floor(Date.now() / 1000)
       const from = Math.max((S.settings.since[a.id] || 0) - 3600, to - 31 * 86400)
       const r = await fetchWindow(a, from, to, true)
-      added += r.added; autoPaid += r.autoPaid
+      added += r.added; autoPaid += r.autoPaid; fresh.push(...r.fresh)
       S.settings.since[a.id] = to
       saveSettings()
     }
+    const tr = await markTransfers(fresh, true)
     S.settings.lastSync = Date.now(); saveSettings()
     S.syncMsg = ''
-    if (added) toast(`Нових операцій: ${added}${autoPaid ? `, автосписання боргу: ${autoPaid}` : ''}`)
+    if (added) toast(`Нових операцій: ${added}${autoPaid ? `, автосписання боргу: ${autoPaid}` : ''}${tr.n ? `, переказів між своїми картками: ${tr.n}` : ''}${tr.repaid ? ' (кредит зменшено)' : ''}`)
   } catch (e) { S.syncMsg = bankError(e) }
   S.syncing = false; render()
 }
@@ -540,6 +577,7 @@ async function loadHistory(n) {
   if (!confirm(`Завантаження займе близько ${steps} хв (банк дозволяє 1 запит на хвилину). Тримай застосунок відкритим. Почати?`)) return
   S.syncing = true; S.progress = 'Історія'; setMsg('Історія…')
   let added = 0
+  const fresh = []
   try {
     if (!S.settings.accounts.length) await loadAccounts()
     for (const a of S.settings.accounts.filter((a) => a.on)) {
@@ -548,12 +586,14 @@ async function loadHistory(n) {
       while (to > target) {
         const from = Math.max(to - 31 * 86400, target)
         S.progress = `Історія ${new Date(from * 1000).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })} – ${new Date(to * 1000).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}`
-        added += (await fetchWindow(a, from, to, false)).added // борги за старими платежами не чіпаємо
+        const r = await fetchWindow(a, from, to, false) // борги за старими платежами не чіпаємо
+        added += r.added; fresh.push(...r.fresh)
         to = from
       }
     }
+    const tr = await markTransfers(fresh, false)
     S.syncMsg = ''
-    toast(`Історію завантажено: +${added}`)
+    toast(`Історію завантажено: +${added}${tr.n ? `, переказів між своїми картками: ${tr.n}` : ''}`)
   } catch (e) { S.syncMsg = bankError(e) + (added ? ` (додано ${added})` : '') }
   S.syncing = false; render()
 }
@@ -606,6 +646,7 @@ document.addEventListener('click', async (e) => {
       const inst = v === 'installment'; dform.d.kind = v
       document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.v === v))
       $('#dinst').style.display = $('#dinst2').style.display = inst ? '' : 'none'
+      $('#dcredit').style.display = inst ? 'none' : ''
       $('#dtotal').placeholder = inst ? 'Загальна сума розстрочки' : 'Кредитний ліміт'
       $('#dbal').placeholder = inst ? 'Залишок до сплати (якщо вже платив)' : 'Використано зараз'
       break
@@ -704,6 +745,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) sync
     S.txs = S.txs.filter((t) => t.src !== 'mono' || t.acc)
     S.settings.accounts = []; S.settings.since = {}; S.settings.lastSync = 0; S.settings.v = 2; saveSettings()
   }
+  markTransfers(S.txs.filter((t) => t.src === 'mono'), false).then(() => render()) // позначаємо вже наявні перекази між своїми картками
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist()
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/money-sw.js', { scope: '/money' }).catch(() => {})
   render(); sync(false)
