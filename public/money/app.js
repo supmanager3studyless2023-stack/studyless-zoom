@@ -2,7 +2,7 @@
 // «Гроші» — простий трекер витрат. Усі дані лишаються на телефоні (IndexedDB + localStorage).
 // Витрати з Monobank підтягуються через особистий API-токен (Apple Pay — це звичайні оплати карткою).
 
-const CATS = [
+const BASE_CATS = [
   { id: 'food', ico: '🛒', name: 'Продукти', color: '#4ade80' },
   { id: 'cafe', ico: '☕', name: 'Кафе', color: '#fb923c' },
   { id: 'transport', ico: '🚌', name: 'Транспорт', color: '#60a5fa' },
@@ -16,7 +16,14 @@ const CATS = [
   { id: 'other', ico: '📦', name: 'Інше', color: '#a1a1aa' },
   { id: 'income', ico: '💰', name: 'Дохід', color: '#22c55e' },
 ]
-const CAT = Object.fromEntries(CATS.map((c) => [c.id, c]))
+const PALETTE = ['#e879f9', '#34d399', '#fbbf24', '#818cf8', '#fb7185', '#22d3ee', '#a3e635', '#f97316']
+let CATS = BASE_CATS
+let CAT = Object.fromEntries(BASE_CATS.map((c) => [c.id, c]))
+const catOf = (id) => CAT[id] || CAT.other
+function rebuildCats() {
+  CATS = [...BASE_CATS, ...S.settings.customCats]
+  CAT = Object.fromEntries(CATS.map((c) => [c.id, c]))
+}
 
 function mccToCat(mcc) {
   const m = Number(mcc)
@@ -59,7 +66,8 @@ const S = {
   tab: 'home',
   month: monthKey(new Date()),
   filter: null,
-  settings: Object.assign({ token: '', limit: 0, accounts: [], since: {}, lastSync: 0, rules: {} }, LS.get('settings', {})),
+  kind: 'all',
+  settings: Object.assign({ token: '', limit: 0, accounts: [], since: {}, lastSync: 0, rules: {}, customCats: [], v: 1 }, LS.get('settings', {})),
   debts: LS.get('debts', []),
   syncing: false,
   syncMsg: '',
@@ -129,6 +137,8 @@ function viewHome() {
   }
   let list = all
   if (S.filter) list = list.filter((t) => t.cat === S.filter)
+  if (S.kind === 'out') list = list.filter((t) => t.amount < 0)
+  else if (S.kind === 'in') list = list.filter((t) => t.amount > 0)
   const groups = []
   for (const t of list) {
     const k = dayKey(t.ts)
@@ -137,13 +147,17 @@ function viewHome() {
   }
   const body = groups.map((g) => {
     const sum = g.items.filter(counts).reduce((s, t) => s - t.amount, 0)
-    return `<div class="day"><span>${dayLabel(g.k)}</span><span>${sum ? '−' + uah(sum) : ''}</span></div>
+    const inSum = g.items.filter((t) => !t.ignore && t.amount > 0).reduce((s, t) => s + t.amount, 0)
+    const dsum = S.kind === 'in' ? (inSum ? '+' + uah(inSum) : '') : sum ? '−' + uah(sum) : ''
+    return `<div class="day"><span>${dayLabel(g.k)}</span><span>${dsum}</span></div>
       <div class="list">${g.items.map(rowHtml).join('')}</div>`
   }).join('') || `<div class="empty">Поки порожньо.<br>Натисни «+», щоб додати витрату${S.settings.token ? '' : ',<br>або підключи Monobank в налаштуваннях'}.</div>`
   return `${monthHeader()}
     <div class="hero"><div class="lbl">Витрачено${isCur ? ` · сьогодні ${uah(today)}` : ''}</div><div class="big">${uah(spent)}</div>${limitHtml}
-    ${income ? `<div class="sub"><span>Надходження ${uah(income)}</span></div>` : ''}</div>
-    ${S.filter ? `<div class="chips"><button class="chip on" data-act="clearfilter">${CAT[S.filter].ico} ${CAT[S.filter].name} ✕</button></div>` : ''}
+    <div class="two" style="margin-top:14px"><div><div class="lbl">Надходження</div><div class="mini in">+${uah(income)}</div></div>
+      <div><div class="lbl">Баланс місяця</div><div class="mini ${income - spent < 0 ? 'neg' : 'in'}">${income - spent < 0 ? '−' : '+'}${uah(income - spent)}</div></div></div></div>
+    <div class="seg">${[['all', 'Усі'], ['out', 'Витрати'], ['in', 'Надходження']].map(([k, n]) => `<button data-act="kind" data-v="${k}" class="${S.kind === k ? 'on' : ''}">${n}</button>`).join('')}</div>
+    ${S.filter ? `<div class="chips"><button class="chip on" data-act="clearfilter">${catOf(S.filter).ico} ${catOf(S.filter).name} ✕</button></div>` : ''}
     ${body}${S.settings.token ? `<div class="sync">${esc(S.syncMsg) || syncedLabel()} · <button data-act="sync" style="text-decoration:underline">оновити</button></div>` : ''}`
 }
 function syncedLabel() {
@@ -153,7 +167,7 @@ function syncedLabel() {
   return m < 1 ? 'Оновлено щойно' : `Оновлено ${m} хв тому`
 }
 function rowHtml(t) {
-  const c = CAT[t.cat] || CAT.other
+  const c = catOf(t.cat)
   const title = t.note || t.desc || c.name
   return `<button class="row ${t.ignore ? 'ign' : ''}" data-act="edit" data-id="${esc(t.id)}">
     <div class="ico">${c.ico}</div>
@@ -164,11 +178,12 @@ function rowHtml(t) {
 function viewStats() {
   const all = monthTxs().filter(counts)
   const total = all.reduce((s, t) => s - t.amount, 0)
+  const income = monthTxs().filter((t) => !t.ignore && t.amount > 0).reduce((s, t) => s + t.amount, 0)
   const by = {}
   for (const t of all) by[t.cat] = (by[t.cat] || 0) - t.amount
   const rows = Object.entries(by).sort((a, b) => b[1] - a[1])
   const body = rows.map(([id, v]) => {
-    const c = CAT[id] || CAT.other, pct = total ? (v / total) * 100 : 0
+    const c = catOf(id), pct = total ? (v / total) * 100 : 0
     return `<button class="cat" data-act="filter" data-v="${id}"><div class="ico">${c.ico}</div><div class="mid">
       <div class="top"><span>${c.name}</span><span>${uah(v)} · ${Math.round(pct)}%</span></div>
       <div class="bar"><i style="width:${pct}%;background:${c.color}"></i></div></div></button>`
@@ -176,7 +191,9 @@ function viewStats() {
   const d = new Date(), isCur = S.month === monthKey(d)
   const days = isCur ? d.getDate() : new Date(+S.month.slice(0, 4), +S.month.slice(5), 0).getDate()
   return `${monthHeader()}<div class="hero"><div class="lbl">Всього витрат</div><div class="big">${uah(total)}</div>
-    <div class="sub"><span>У середньому ${uah(total / days)}/день</span><span>${all.length} операцій</span></div></div>${body}`
+    <div class="sub"><span>У середньому ${uah(total / days)}/день</span><span>${all.length} операцій</span></div>
+    <div class="two" style="margin-top:14px"><div><div class="lbl">Надходження</div><div class="mini in">+${uah(income)}</div></div>
+      <div><div class="lbl">Баланс місяця</div><div class="mini ${income - total < 0 ? 'neg' : 'in'}">${income - total < 0 ? '−' : '+'}${uah(income - total)}</div></div></div></div>${body}`
 }
 
 function viewSettings() {
@@ -191,6 +208,10 @@ function viewSettings() {
       <button class="btn" data-act="savetoken">${s.token ? 'Зберегти й оновити' : 'Підключити'}</button>
       ${accs ? `<div style="margin-top:10px">${accs}</div>` : ''}
       ${s.token ? '<button class="btn del" data-act="disconnect">Відключити банк</button>' : ''}</div>
+    <h3>Мої категорії</h3><div class="box">
+      ${s.customCats.map((c) => `<div class="tog"><span>${esc(c.ico)} ${esc(c.name)}</span><button data-act="delcat" data-v="${esc(c.id)}" style="color:var(--danger)">Видалити</button></div>`).join('')}
+      <div class="two" style="grid-template-columns:70px 1fr;margin-top:${s.customCats.length ? 10 : 0}px"><input class="field" id="cico" placeholder="🏷️" style="margin:0;text-align:center"><input class="field" id="cname" placeholder="Назва нової категорії" style="margin:0"></div>
+      <button class="btn sec" data-act="addcat" style="margin-top:10px">Додати категорію</button></div>
     <h3>Дані</h3><div class="box"><p>Дані лише на телефоні. Раз на кілька тижнів зберігай копію — якщо видалити застосунок або почистити Safari, дані зникнуть.</p>
       <button class="btn sec" data-act="export">Зберегти копію</button>
       <button class="btn sec" data-act="import">Відновити з копії</button>
@@ -281,6 +302,15 @@ function saveDebtOp() {
 
 // ---------- форма додавання/редагування ----------
 let form = null
+const catGrid = (sel) => CATS.filter((c) => c.id !== 'income').map((c) => `<button data-act="fcat" data-v="${c.id}" class="${sel === c.id ? 'on' : ''}"><b>${esc(c.ico)}</b>${esc(c.name)}</button>`).join('')
+  + '<button data-act="newcat"><b>＋</b>Своя</button>'
+function addCategory(name, ico) {
+  name = (name || '').trim().slice(0, 20)
+  if (!name) return null
+  const c = { id: 'c:' + Date.now().toString(36), name, ico: Array.from((ico || '').trim()).slice(0, 4).join('') || '🏷️', color: PALETTE[S.settings.customCats.length % PALETTE.length] }
+  S.settings.customCats.push(c); saveSettings(); rebuildCats()
+  return c
+}
 function openSheet(tx) {
   const isNew = !tx
   const t = tx ? { ...tx } : { id: 'm:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ts: Date.now(), amount: 0, cat: LS.get('lastCat', 'food'), src: 'manual', note: '' }
@@ -290,7 +320,7 @@ function openSheet(tx) {
   sheet.innerHTML = `<div class="panel">
     <div class="seg"><button data-act="ftype" data-v="e" class="${form.expense ? 'on' : ''}">Витрата</button><button data-act="ftype" data-v="i" class="${form.expense ? '' : 'on'}">Дохід</button></div>
     <input class="amt" id="amt" type="text" inputmode="decimal" placeholder="0" value="${t.amount ? (Math.abs(t.amount) / 100).toString().replace('.', ',') : ''}" autocomplete="off">
-    <div class="grid">${CATS.filter((c) => c.id !== 'income').map((c) => `<button data-act="fcat" data-v="${c.id}" class="${t.cat === c.id ? 'on' : ''}"><b>${c.ico}</b>${c.name}</button>`).join('')}</div>
+    <div class="grid" id="catgrid">${catGrid(t.cat)}</div>
     <input class="field" id="note" placeholder="${t.desc ? esc(t.desc) : 'Нотатка (необов’язково)'}" value="${esc(t.note || '')}">
     <div class="two"><input class="field" id="date" type="datetime-local" value="${dt.toISOString().slice(0, 16)}" style="margin:0">
       <button class="btn sec" data-act="fphoto" style="margin:0" id="photobtn">${form.photo ? '📎 Чек додано' : '📷 Фото чека'}</button></div>
@@ -334,7 +364,7 @@ async function saveForm() {
     S.settings.rules[normDesc(t.desc)] = t.cat; saveSettings()
     let n = 0
     for (const o of S.txs) if (o.src === 'mono' && o.id !== t.id && normDesc(o.desc) === normDesc(t.desc) && o.cat !== t.cat && o.amount < 0) { o.cat = t.cat; await dbPut(o); n++ }
-    toast(`Запам’ятав: ${t.desc} → ${CAT[t.cat].name}${n ? ` (ще ${n})` : ''}`)
+    toast(`Запам’ятав: ${t.desc} → ${catOf(t.cat).name}${n ? ` (ще ${n})` : ''}`)
   }
   if (t.ts) { const mk = monthKey(new Date(t.ts)); if (form.isNew && mk !== S.month) S.month = mk }
   closeSheet(); render()
@@ -356,10 +386,15 @@ function setMsg(m) { S.syncMsg = m; if (S.tab === 'home' && !form) render() }
 async function loadAccounts() {
   const info = await mono('/personal/client-info')
   const old = Object.fromEntries(S.settings.accounts.map((a) => [a.id, a.on]))
-  S.settings.accounts = (info.accounts || []).filter((a) => a.currencyCode === 980).map((a) => ({
+  // лише особисті гривневі картки: рахунки ФОП ('fop') ігноруємо
+  const NAMES = { black: 'Чорна', white: 'Біла', platinum: 'Platinum', iron: 'Iron', yellow: 'Жовта', eAid: 'єПідтримка' }
+  const fop = new Set((info.accounts || []).filter((a) => a.type === 'fop').map((a) => a.id))
+  S.settings.accounts = (info.accounts || []).filter((a) => a.currencyCode === 980 && a.type !== 'fop').map((a) => ({
     id: a.id, on: old[a.id] ?? true,
-    name: `${a.type === 'black' ? 'Чорна' : a.type === 'white' ? 'Біла' : a.type} ${(a.maskedPan && a.maskedPan[0]) || ''}`.trim(),
+    name: `${NAMES[a.type] || a.type} ${(a.maskedPan && a.maskedPan[0]) || ''}`.trim(),
   }))
+  for (const t of S.txs.filter((t) => fop.has(t.acc))) await dbDel(t.id)
+  S.txs = S.txs.filter((t) => !fop.has(t.acc))
   saveSettings()
 }
 
@@ -385,7 +420,7 @@ async function sync(force) {
           if (S.txs.some((x) => x.id === id)) continue
           const rule = S.settings.rules[normDesc(it.description)]
           const t = {
-            id, ts: it.time * 1000, amount: it.amount, src: 'mono', desc: it.description || '', note: it.comment || '',
+            id, acc: a.id, ts: it.time * 1000, amount: it.amount, src: 'mono', desc: it.description || '', note: it.comment || '',
             mcc: it.mcc, cat: it.amount > 0 ? 'income' : rule || mccToCat(it.mcc),
           }
           await dbPut(t); S.txs.push(t); added++
@@ -425,7 +460,12 @@ async function importData(file) {
       await dbPut(t)
     }
     S.txs = await dbAll()
-    if (d.settings) { S.settings = { ...S.settings, limit: d.settings.limit || S.settings.limit, rules: { ...S.settings.rules, ...d.settings.rules } }; saveSettings() }
+    if (d.settings) {
+      const cc = [...S.settings.customCats]
+      for (const c of d.settings.customCats || []) if (!cc.some((x) => x.id === c.id)) cc.push(c)
+      S.settings = { ...S.settings, limit: d.settings.limit || S.settings.limit, rules: { ...S.settings.rules, ...d.settings.rules }, customCats: cc }
+      saveSettings(); rebuildCats()
+    }
     if (Array.isArray(d.debts)) { S.debts = d.debts; saveDebts() }
     toast(`Відновлено: ${d.txs.length}`); render()
   } catch { toast('Файл не підійшов') }
@@ -458,6 +498,7 @@ document.addEventListener('click', async (e) => {
       S.month = monthKey(d); render(); break
     }
     case 'filter': S.filter = v; S.tab = 'home'; render(); window.scrollTo(0, 0); break
+    case 'kind': S.kind = v; render(); break
     case 'clearfilter': S.filter = null; render(); break
     case 'sync': sync(true); break
     case 'ftype': form.expense = v === 'e'; document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.v === v)); break
@@ -474,6 +515,20 @@ document.addEventListener('click', async (e) => {
     }
     case 'disconnect':
       if (confirm('Відключити банк? Вже завантажені операції залишаться.')) { S.settings.token = ''; S.settings.accounts = []; saveSettings(); render() }
+      break
+    case 'newcat': {
+      const c = addCategory(prompt('Назва категорії'), prompt('Емодзі (необов’язково)', '🏷️'))
+      if (c) { form.t.cat = c.id; $('#catgrid').innerHTML = catGrid(c.id) }
+      break
+    }
+    case 'addcat': if (addCategory($('#cname').value, $('#cico').value)) render(); else toast('Введи назву'); break
+    case 'delcat':
+      if (confirm('Видалити категорію? Операції з нею перейдуть в «Інше».')) {
+        S.settings.customCats = S.settings.customCats.filter((c) => c.id !== v)
+        for (const k of Object.keys(S.settings.rules)) if (S.settings.rules[k] === v) delete S.settings.rules[k]
+        for (const t of S.txs) if (t.cat === v) { t.cat = 'other'; await dbPut(t) }
+        saveSettings(); rebuildCats(); render()
+      }
       break
     case 'export': exportData(); break
     case 'import': $('#importfile').click(); break
@@ -496,6 +551,13 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) sync
 // ---------- старт ----------
 ;(async () => {
   try { db = await openDb(); S.txs = await dbAll() } catch { toast('Не вдалося відкрити сховище') }
+  rebuildCats()
+  if (S.settings.v < 2) {
+    // раніше в імпорт могли потрапити рахунки ФОП: чистимо банківські операції без позначки рахунку й завантажуємо заново лише з особистих карток
+    for (const t of S.txs.filter((t) => t.src === 'mono' && !t.acc)) await dbDel(t.id)
+    S.txs = S.txs.filter((t) => t.src !== 'mono' || t.acc)
+    S.settings.accounts = []; S.settings.since = {}; S.settings.lastSync = 0; S.settings.v = 2; saveSettings()
+  }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist()
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/money-sw.js', { scope: '/money' }).catch(() => {})
   render(); sync(false)
