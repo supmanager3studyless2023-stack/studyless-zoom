@@ -552,7 +552,9 @@ async function markTransfers(cands, autoDebt) {
   let n = 0, repaid = 0
   for (const t of cands) {
     if (t.own || t.src !== 'mono' || !t.acc) continue
-    const m = pool.find((o) => o !== t && !o.own && o.acc !== t.acc && o.amount === -t.amount && Math.abs(o.ts - t.ts) <= 5 * 60000)
+    // сума збігається, або на боці відправника є комісія до 5% (напр., переказ з кредитної картки)
+    const fee = (a, b) => a.amount < 0 && b.amount > 0 && Number(a.mcc) === 4829 && Number(b.mcc) === 4829 && -a.amount >= b.amount && -a.amount <= b.amount * 1.05 + 100
+    const m = pool.find((o) => o !== t && !o.own && o.acc !== t.acc && Math.abs(o.ts - t.ts) <= 5 * 60000 && (o.amount === -t.amount || fee(t, o) || fee(o, t)))
     if (!m) continue
     for (const x of [t, m]) {
       x.own = true; x.cat = 'transfer'
