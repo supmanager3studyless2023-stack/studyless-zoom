@@ -83,7 +83,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 function monthKey(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') }
 function dayKey(ts) { const d = new Date(ts); return monthKey(d) + '-' + String(d.getDate()).padStart(2, '0') }
 const uah = (k) => Math.round(Math.abs(k) / 100).toLocaleString('uk-UA').replace(/ /g, ' ') + ' ₴'
-const monthName = (key) => new Date(key + '-01T12:00').toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' })
+const monthName = (key) => new Date(key + '-01T12:00').toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' }).replace(/\s*р\.$/, '')
 function dayLabel(key) {
   const today = dayKey(Date.now()), yest = dayKey(Date.now() - 864e5)
   if (key === today) return 'Сьогодні'
@@ -154,6 +154,54 @@ function backupBanner() {
   if (S.txs.length + S.debts.length < 5 || Date.now() - s.lastBackup < 14 * day || Date.now() - s.snooze < 3 * day) return ''
   return `<div class="box" style="margin-bottom:12px"><p style="margin:0 0 10px">Твої записи зберігаються лише на цьому телефоні. Збережи копію, щоб нічого не втратити.</p>
     <div class="two"><button class="btn" data-act="export" style="margin:0">Зберегти копію</button><button class="btn sec" data-act="snooze" style="margin:0">Пізніше</button></div></div>`
+}
+// ---------- перевірка даних ----------
+function reportHtml() {
+  const mono = S.txs.filter((t) => t.src === 'mono')
+  const fmtD = (ts) => new Date(ts).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short', year: '2-digit' })
+  const byMonth = {}
+  for (const t of S.txs) {
+    const k = monthKey(new Date(t.ts)); const m = byMonth[k] || (byMonth[k] = { inc: 0, spent: 0, own: 0, ign: 0, n: 0 })
+    m.n++
+    if (t.own) { if (t.amount > 0) m.own += t.amount } else if (t.ignore) m.ign += Math.abs(t.amount)
+    else if (t.amount > 0) m.inc += t.amount; else m.spent -= t.amount
+  }
+  const months = Object.keys(byMonth).sort().reverse().map((k) => {
+    const m = byMonth[k], diff = m.inc - m.spent
+    return `<div class="box" style="margin-bottom:8px"><b style="text-transform:capitalize">${monthName(k)}</b>
+      <div class="sub"><span>Надходження</span><span>+${uah(m.inc)}</span></div><div class="sub"><span>Витрати</span><span>−${uah(m.spent)}</span></div>
+      <div class="sub"><span>Різниця</span><b style="color:${diff < 0 ? 'var(--danger)' : 'var(--accent)'}">${diff < 0 ? '−' : '+'}${uah(diff)}</b></div>
+      <div class="sub"><span>Перекази між своїми картками (не враховано)</span><span>${uah(m.own)}</span></div>
+      ${m.ign ? `<div class="sub"><span>Позначено «не враховувати»</span><span>${uah(m.ign)}</span></div>` : ''}<div class="sub"><span>Операцій</span><span>${m.n}</span></div></div>`
+  }).join('')
+  // покриття даних по картках
+  const warns = []
+  const cov = S.settings.accounts.map((a) => {
+    const ts = mono.filter((t) => t.acc === a.id).map((t) => t.ts).sort((x, y) => x - y)
+    if (!ts.length) return `<div class="sub"><span>${esc(a.name)}${a.on ? '' : ' (вимкнено)'}</span><span>немає операцій</span></div>`
+    let gap = 0, gapAt = 0
+    for (let i = 1; i < ts.length; i++) if (ts[i] - ts[i - 1] > gap) { gap = ts[i] - ts[i - 1]; gapAt = ts[i - 1] }
+    if (gap > 10 * 864e5) warns.push(`Картка «${a.name}»: немає операцій ${Math.round(gap / 864e5)} дн. після ${fmtD(gapAt)} — можливо, історію не завантажено.`)
+    return `<div class="sub"><span>${esc(a.name)}${a.on ? '' : ' (вимкнено)'}</span><span>${fmtD(ts[0])} – ${fmtD(ts[ts.length - 1])} · ${ts.length}</span></div>`
+  }).join('')
+  const off = S.settings.accounts.filter((a) => !a.on)
+  if (off.length) warns.push(`Вимкнені картки (${off.map((a) => a.name).join(', ')}) не потрапляють у витрати й надходження.`)
+  const first = mono.length ? Math.min(...mono.map((t) => t.ts)) : 0
+  if (first && new Date(first).getDate() > 3) warns.push(`Дані з банку починаються з ${fmtD(first)}, тому ${monthName(monthKey(new Date(first)))} неповний. Завантаж історію в налаштуваннях.`)
+  warns.push('Не враховано: рахунки ФОП, валютні рахунки та скарбнички. Переказ у скарбничку виглядає як витрата, а з неї як надходження.')
+  // підозрілі непарні перекази
+  const sus = mono.filter((t) => !t.own && !t.ignore && (Number(t.mcc) === 4829 || /переказ|скарбнич|(^|\s)банк[уа](\s|$)|jar/i.test(t.desc || '')))
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount)).slice(0, 10)
+  const susHtml = sus.map((t) => `<button class="row" data-act="repedit" data-id="${esc(t.id)}" style="padding:8px 0"><div class="mid"><div class="t">${esc(t.desc || 'Переказ')}</div><div class="s">${fmtD(t.ts)} · ${esc(S.settings.accounts.find((a) => a.id === t.acc)?.name || '')}</div></div><div class="a ${t.amount > 0 ? 'in' : ''}">${t.amount > 0 ? '+' : '−'}${uah(t.amount)}</div></button>`).join('')
+  const big = S.txs.filter((t) => active(t) && t.amount > 0).sort((a, b) => b.amount - a.amount).slice(0, 5)
+    .map((t) => `<div class="sub"><span>${fmtD(t.ts)} · ${esc(t.desc || t.note || 'Надходження')}</span><span>+${uah(t.amount)}</span></div>`).join('')
+  return `<div class="panel"><h3 style="margin-top:0">Перевірка даних</h3>
+    <div class="box" style="margin-bottom:12px">${warns.map((w) => `<p style="color:var(--text)">⚠️ ${esc(w)}</p>`).join('')}</div>
+    <h3>Місяці</h3>${months || '<p>Немає даних.</p>'}
+    <h3>Покриття по картках</h3><div class="box">${cov || '<p>Банк не підключено.</p>'}</div>
+    <h3>Найбільші непарні перекази</h3><div class="box"><p>Якщо це переказ між твоїми картками або скарбничкою, відкрий і ввімкни «Переказ між моїми картками».</p>${susHtml || '<p>Немає.</p>'}</div>
+    <h3>Найбільші надходження</h3><div class="box">${big || '<p>Немає.</p>'}</div>
+    <button class="btn sec" data-act="fclose" style="margin-top:12px">Закрити</button></div>`
 }
 function dayGroups(list, kind) {
   const groups = []
@@ -271,6 +319,7 @@ function viewSettings() {
       <div class="two" style="grid-template-columns:70px 1fr;margin-top:${s.customCats.length ? 10 : 0}px"><input class="field" id="cico" placeholder="🏷️" style="margin:0;text-align:center"><input class="field" id="cname" placeholder="Назва нової категорії" style="margin:0"></div>
       <button class="btn sec" data-act="addcat" style="margin-top:10px">Додати категорію</button></div>
     <h3>Дані</h3><div class="box"><p>${s.lastBackup ? 'Остання копія: ' + new Date(s.lastBackup).toLocaleDateString('uk-UA', { day: 'numeric', month: 'long' }) + '. ' : ''}Дані лише на телефоні. Раз на кілька тижнів зберігай копію — якщо видалити застосунок або почистити Safari, дані зникнуть.</p>
+      <button class="btn sec" data-act="report">Перевірити дані</button>
       <button class="btn sec" data-act="export">Зберегти копію</button>
       <button class="btn sec" data-act="import">Відновити з копії</button>
       <input type="file" id="importfile" accept="application/json" hidden></div>
@@ -285,6 +334,22 @@ function nextPayDate(d) {
   let t = at(now.getFullYear(), now.getMonth())
   if (t < now) t = at(now.getFullYear(), now.getMonth() + 1)
   return { t, days: Math.round((t - now) / 864e5) }
+}
+// Цикл кредитки: скільки витрачено з картки і скільки погашено переказами зі своїх карток за останні місяці
+function creditFlowHtml(d) {
+  const rows = []
+  for (let i = 0; i < 3; i++) {
+    const dt = new Date(); dt.setDate(1); dt.setMonth(dt.getMonth() - i)
+    const key = monthKey(dt)
+    let spent = 0, repaid = 0
+    for (const t of S.txs) {
+      if (t.acc !== d.acc || t.ignore || monthKey(new Date(t.ts)) !== key) continue
+      if (t.amount < 0 && !t.own) spent -= t.amount
+      else if (t.amount > 0 && t.own) repaid += t.amount
+    }
+    if (spent || repaid) rows.push(`<div class="sub"><span style="text-transform:capitalize">${dt.toLocaleDateString('uk-UA', { month: 'long' })}</span><span>витрачено ${uah(spent)} · погашено ${uah(repaid)}</span></div>`)
+  }
+  return rows.length ? `<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:6px"><div class="lbl" style="color:var(--muted);font-size:13px">По картці за місяцями</div>${rows.join('')}</div>` : ''
 }
 function viewDebts() {
   const owed = S.debts.reduce((s, d) => s + d.balance, 0)
@@ -305,6 +370,7 @@ function viewDebts() {
       ${np ? `<div class="sub"><span>Платіж ${uah(d.monthly)} · ${np.t.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long' })}</span><span>${when(np.days)}</span></div>` : ''}
       <div class="two" style="margin-top:12px"><button class="btn" data-act="dop" data-id="${d.id}" data-v="pay">Погасити</button>
         ${credit ? `<button class="btn sec" data-act="dop" data-id="${d.id}" data-v="borrow" style="margin:0">Взяв ще</button>` : ''}</div>
+      ${credit && d.acc ? creditFlowHtml(d) : ''}
       ${log ? `<div style="margin-top:8px">${log}</div>` : ''}</div>`
   }).join('') || '<div class="empty">Тут можна вести розстрочку й кредитний ліміт.<br>Натисни «+», щоб додати.</div>'
   return `<div class="head"><div class="month">Борги</div></div>
@@ -693,6 +759,8 @@ document.addEventListener('click', async (e) => {
         saveSettings(); rebuildCats(); render()
       }
       break
+    case 'report': $('#sheet').innerHTML = reportHtml(); $('#sheet').classList.add('open'); break
+    case 'repedit': { const t = S.txs.find((x) => x.id === el.dataset.id); closeSheet(); if (t) openSheet(t) } break
     case 'export': exportData(); break
     case 'snooze': S.settings.snooze = Date.now(); saveSettings(); render(); break
     case 'import': $('#importfile').click(); break
