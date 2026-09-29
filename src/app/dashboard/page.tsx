@@ -361,7 +361,7 @@ function AnalysisForm({
             </div>
           )}
 
-          {!isProcessing && step !== 'done' && (
+          {!isProcessing && (
             <div style={{ marginTop: 18, display: 'flex', gap: 10 }}>
               <button type="submit" style={{ padding: '10px 28px', borderRadius: 10, border: 'none', background: '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
                 Аналізувати
