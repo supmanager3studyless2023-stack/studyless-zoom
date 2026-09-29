@@ -374,7 +374,7 @@ function forecast() {
   const last = Math.max(...plans.map((p) => new Date(p.date + 'T00:00:00')))
   const horizon = Math.min(120, Math.round((last - today) / 864e5))
   const insts = S.debts.filter((d) => d.kind === 'installment' && d.balance > 0 && d.day).map((d) => ({ ...d, rem: d.balance }))
-  let pos = free, fixed = 0, firstNeg = null
+  let pos = free, fixed = 0, firstNeg = null, low = { pos: free, ts: today.getTime() }
   const ins = [], hasIn = new Set()
   for (let i = 1; i <= horizon; i++) {
     const day = new Date(today.getTime() + i * 864e5), key = dayKey(day.getTime())
@@ -388,8 +388,9 @@ function forecast() {
       }
     }
     if (pos < 0 && !firstNeg) firstNeg = { ts: day.getTime(), days: i }
+    if (pos < low.pos) low = { pos, ts: day.getTime() }
   }
-  return { free, daily, firstNeg, ins, end: pos, last }
+  return { free, daily, firstNeg, ins, end: pos, last, low }
 }
 function forecastHtml() {
   const s = S.settings, f = forecast()
@@ -403,10 +404,11 @@ function forecastHtml() {
     const gap = x.before < 0
     return `<div class="sub"><span>${esc(x.p.name)} · ${dateStr(new Date(x.p.date + 'T12:00:00'))} · +${uah(x.p.amount)}</span><span style="color:${gap ? 'var(--danger)' : 'var(--accent)'}">${gap ? 'бракує ' + uah(x.before) : 'запас ' + uah(x.before)}</span></div>`
   }).join('')
+  const gapLine = f.low.pos < 0 ? `<div class="sub"><span>Найбільший розрив (стільки треба знайти додатково)</span><b style="color:var(--danger)">−${uah(f.low.pos)} · ${dateStr(f.low.ts)}</b></div>` : ''
   const safe = f.ins[0] && f.ins[0].safeDaily != null ? `<div class="sub"><span>Щоб дотягнути до першої виплати без мінуса</span><b>≈ ${uah(f.ins[0].safeDaily)}/день</b></div>` : ''
   return `<div class="box" style="margin-bottom:12px"><b>Прогноз до надходжень</b>
     <div class="sub"><span>Зараз доступно (вільний кредит + свої)</span><span>${uah(f.free)}</span></div>
-    <div style="margin-top:8px">${head}</div><div style="margin-top:6px">${rows}</div>${safe}${controls}
+    <div style="margin-top:8px">${head}</div><div style="margin-top:6px">${rows}</div>${gapLine}${safe}${controls}
     <p style="margin:10px 0 0;font-size:13px">Рахується з урахуванням платежів за розстрочку й твоїх витрат на день.</p></div>`
 }
 function plansHtml() {
