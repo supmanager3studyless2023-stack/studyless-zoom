@@ -69,7 +69,7 @@ const S = {
   statCat: null,
   statScroll: 0,
   q: '',
-  settings: Object.assign({ token: '', limit: 0, accounts: [], since: {}, lastSync: 0, rules: {}, customCats: [], v: 1, lastBackup: 0, snooze: 0, openAdd: false }, LS.get('settings', {})),
+  settings: Object.assign({ token: '', limit: 0, accounts: [], since: {}, lastSync: 0, rules: {}, customCats: [], v: 1, lastBackup: 0, snooze: 0, openAdd: false, plans: [], daily: 0, own: 0 }, LS.get('settings', {})),
   debts: LS.get('debts', []),
   syncing: false,
   syncMsg: '',
@@ -355,6 +355,87 @@ function creditFlowHtml(d) {
   }
   return rows.length ? `<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:6px"><div class="lbl" style="color:var(--muted);font-size:13px">По картці за місяцями</div>${rows.join('')}</div>` : ''
 }
+
+// ---------- прогноз до надходжень (затримка виплат, життя на кредитному ліміті) ----------
+const dateStr = (ts) => new Date(ts).toLocaleDateString('uk-UA', { day: 'numeric', month: 'long' })
+function autoDaily() {
+  const from = Date.now() - 30 * 864e5
+  const keys = S.debts.filter((d) => d.kind === 'installment' && d.key).map((d) => normDesc(d.key))
+  let sum = 0
+  for (const t of S.txs) if (counts(t) && t.ts >= from && !keys.some((k) => normDesc(t.desc).includes(k))) sum -= t.amount
+  return Math.round(sum / 30)
+}
+function forecast() {
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const plans = S.settings.plans.filter((p) => p.date && new Date(p.date + 'T00:00:00') >= today)
+  if (!plans.length) return null
+  const free = S.debts.filter((d) => d.kind === 'credit').reduce((s, d) => s + Math.max(0, d.total - d.balance), 0) + S.settings.own
+  const daily = S.settings.daily || autoDaily()
+  const last = Math.max(...plans.map((p) => new Date(p.date + 'T00:00:00')))
+  const horizon = Math.min(120, Math.round((last - today) / 864e5))
+  const insts = S.debts.filter((d) => d.kind === 'installment' && d.balance > 0 && d.day).map((d) => ({ ...d, rem: d.balance }))
+  let pos = free, fixed = 0, firstNeg = null
+  const ins = [], hasIn = new Set()
+  for (let i = 1; i <= horizon; i++) {
+    const day = new Date(today.getTime() + i * 864e5), key = dayKey(day.getTime())
+    pos -= daily
+    for (const d of insts) if (d.rem > 0 && day.getDate() === Math.min(d.day, new Date(day.getFullYear(), day.getMonth() + 1, 0).getDate())) {
+      const pay = Math.min(d.monthly, d.rem); d.rem -= pay; pos -= pay; fixed += pay
+    }
+    for (const p of plans.filter((x) => x.date === key)) {
+      if (p.kind === 'out') { pos -= p.amount; fixed += p.amount } else {
+        ins.push({ p, days: i, before: pos, safeDaily: hasIn.size ? null : Math.max(0, free - fixed) / i }); hasIn.add(p.id); pos += p.amount
+      }
+    }
+    if (pos < 0 && !firstNeg) firstNeg = { ts: day.getTime(), days: i }
+  }
+  return { free, daily, firstNeg, ins, end: pos, last }
+}
+function forecastHtml() {
+  const s = S.settings, f = forecast()
+  const controls = `<div class="two" style="margin-top:10px"><div><div class="lbl" style="color:var(--muted);font-size:13px">Витрати на день</div><input class="field" id="daily" inputmode="numeric" placeholder="${uah(autoDaily())} (авто)" value="${s.daily ? s.daily / 100 : ''}" style="margin:0"></div>
+    <div><div class="lbl" style="color:var(--muted);font-size:13px">Своїх грошей зараз</div><input class="field" id="own" inputmode="numeric" placeholder="0" value="${s.own ? s.own / 100 : ''}" style="margin:0"></div></div>`
+  if (!f) return `<div class="box" style="margin-bottom:12px"><b>Прогноз до надходжень</b><p style="margin:6px 0 0">Додай нижче очікувані виплати (з датою) і разові витрати, наприклад дні народження. Тоді я покажу, коли закінчиться вільний кредит.</p></div>`
+  const head = f.firstNeg
+    ? `<div style="color:var(--danger);font-weight:600">⚠️ Вільні гроші й кредит закінчаться ≈ ${dateStr(f.firstNeg.ts)} (через ${f.firstNeg.days} дн)</div>`
+    : `<div style="color:var(--accent);font-weight:600">✅ До ${dateStr(f.last)} вистачає</div>`
+  const rows = f.ins.map((x) => {
+    const gap = x.before < 0
+    return `<div class="sub"><span>${esc(x.p.name)} · ${dateStr(new Date(x.p.date + 'T12:00:00'))} · +${uah(x.p.amount)}</span><span style="color:${gap ? 'var(--danger)' : 'var(--accent)'}">${gap ? 'бракує ' + uah(x.before) : 'запас ' + uah(x.before)}</span></div>`
+  }).join('')
+  const safe = f.ins[0] && f.ins[0].safeDaily != null ? `<div class="sub"><span>Щоб дотягнути до першої виплати без мінуса</span><b>≈ ${uah(f.ins[0].safeDaily)}/день</b></div>` : ''
+  return `<div class="box" style="margin-bottom:12px"><b>Прогноз до надходжень</b>
+    <div class="sub"><span>Зараз доступно (вільний кредит + свої)</span><span>${uah(f.free)}</span></div>
+    <div style="margin-top:8px">${head}</div><div style="margin-top:6px">${rows}</div>${safe}${controls}
+    <p style="margin:10px 0 0;font-size:13px">Рахується з урахуванням платежів за розстрочку й твоїх витрат на день.</p></div>`
+}
+function plansHtml() {
+  const pl = [...S.settings.plans].sort((a, b) => a.date.localeCompare(b.date))
+  const today = dayKey(Date.now())
+  const rows = pl.map((p) => `<button class="row" data-act="planedit" data-id="${esc(p.id)}" style="padding:10px 0"><div class="ico">${p.kind === 'in' ? '📥' : '🎁'}</div>
+    <div class="mid"><div class="t">${esc(p.name)}</div><div class="s">${dateStr(new Date(p.date + 'T12:00:00'))}${p.date < today ? ' · дата минула — онови' : ''}</div></div><div class="a ${p.kind === 'in' ? 'in' : ''}">${p.kind === 'in' ? '+' : '−'}${uah(p.amount)}</div></button>`).join('')
+  return `<h3>Очікування й плани</h3><div class="box">${rows || '<p>Поки порожньо.</p>'}
+    <div class="two" style="margin-top:10px"><button class="btn sec" data-act="planadd" data-v="in" style="margin:0">＋ Очікую виплату</button><button class="btn sec" data-act="planadd" data-v="out" style="margin:0">＋ Разова витрата</button></div></div>`
+}
+let pform = null
+function openPlan(kind, p) {
+  pform = { p: p ? { ...p } : { id: 'p:' + Date.now().toString(36), kind, name: '', amount: 0, date: '' }, isNew: !p }
+  const x = pform.p
+  $('#sheet').innerHTML = `<div class="panel"><div class="lbl" style="color:var(--muted);text-align:center;margin-bottom:8px">${x.kind === 'in' ? 'Очікувана виплата' : 'Разова витрата'}</div>
+    <input class="field" id="pname" placeholder="${x.kind === 'in' ? 'Напр. 1-ша частина за серпень' : 'Напр. Дні народження'}" value="${esc(x.name)}">
+    <input class="field" id="pamt" inputmode="decimal" placeholder="Сума" value="${x.amount ? x.amount / 100 : ''}">
+    <input class="field" id="pdate" type="date" value="${x.date}">
+    <button class="btn" data-act="plansave">Зберегти</button>${!pform.isNew ? '<button class="btn del" data-act="plandel">Видалити</button>' : ''}<button class="btn sec" data-act="fclose">Закрити</button></div>`
+  $('#sheet').classList.add('open')
+}
+function savePlan() {
+  const x = pform.p
+  x.name = $('#pname').value.trim(); x.amount = kop('#pamt'); x.date = $('#pdate').value
+  if (!x.name || x.amount <= 0 || !x.date) { toast('Введи назву, суму й дату'); return }
+  const i = S.settings.plans.findIndex((o) => o.id === x.id)
+  if (i >= 0) S.settings.plans[i] = x; else S.settings.plans.push(x)
+  saveSettings(); closeSheet(); render()
+}
 function viewDebts() {
   const owed = S.debts.reduce((s, d) => s + d.balance, 0)
   const pays = S.debts.filter((d) => d.kind === 'installment' && d.balance > 0 && d.day).map((d) => ({ d, ...nextPayDate(d) })).sort((a, b) => a.days - b.days)
@@ -379,7 +460,7 @@ function viewDebts() {
   }).join('') || '<div class="empty">Тут можна вести розстрочку й кредитний ліміт.<br>Натисни «+», щоб додати.</div>'
   return `<div class="head"><div class="month">Борги</div></div>
     <div class="hero"><div class="lbl">Загалом винен</div><div class="big">${uah(owed)}</div>
-    ${nxt ? `<div class="sub"><span>Найближчий платіж: ${esc(nxt.d.name)} ${uah(nxt.d.monthly)}</span><span>${when(nxt.days)}</span></div>` : ''}</div>${cards}`
+    ${nxt ? `<div class="sub"><span>Найближчий платіж: ${esc(nxt.d.name)} ${uah(nxt.d.monthly)}</span><span>${when(nxt.days)}</span></div>` : ''}</div>${forecastHtml()}${cards}${plansHtml()}`
 }
 
 let dform = null
@@ -465,7 +546,7 @@ function openSheet(tx) {
   sheet.classList.add('open')
   if (isNew) setTimeout(() => $('#amt')?.focus(), 60)
 }
-const closeSheet = () => { $('#sheet').classList.remove('open'); $('#sheet').innerHTML = ''; form = null; dform = null }
+const closeSheet = () => { $('#sheet').classList.remove('open'); $('#sheet').innerHTML = ''; form = null; dform = null; pform = null }
 
 async function resizePhoto(file) {
   const bmp = await createImageBitmap(file)
@@ -703,7 +784,7 @@ async function importData(file) {
     if (d.settings) {
       const cc = [...S.settings.customCats]
       for (const c of d.settings.customCats || []) if (!cc.some((x) => x.id === c.id)) cc.push(c)
-      S.settings = { ...S.settings, limit: d.settings.limit || S.settings.limit, rules: { ...S.settings.rules, ...d.settings.rules }, customCats: cc }
+      S.settings = { ...S.settings, limit: d.settings.limit || S.settings.limit, rules: { ...S.settings.rules, ...d.settings.rules }, customCats: cc, plans: [...S.settings.plans, ...(d.settings.plans || []).filter((x) => !S.settings.plans.some((y) => y.id === x.id))] }
       saveSettings(); rebuildCats()
     }
     if (Array.isArray(d.debts)) { S.debts = [...S.debts, ...d.debts.filter((x) => !S.debts.some((y) => y.id === x.id))]; saveDebts() }
@@ -730,6 +811,10 @@ document.addEventListener('click', async (e) => {
       $('#dbal').placeholder = inst ? 'Залишок до сплати (якщо вже платив)' : 'Використано зараз'
       break
     }
+    case 'planadd': openPlan(v); break
+    case 'planedit': openPlan(null, S.settings.plans.find((p) => p.id === el.dataset.id)); break
+    case 'plansave': savePlan(); break
+    case 'plandel': S.settings.plans = S.settings.plans.filter((p) => p.id !== pform.p.id); saveSettings(); closeSheet(); render(); break
     case 'dsave': saveDebt(); break
     case 'dopsave': saveDebtOp(); break
     case 'ddel': if (confirm('Видалити?')) { S.debts = S.debts.filter((d) => d.id !== dform.d.id); saveDebts(); closeSheet(); render() } break
@@ -786,6 +871,8 @@ document.addEventListener('change', async (e) => {
     $('#photobtn').textContent = '📎 Чек додано'
     $('#photoprev').innerHTML = `<img class="photo" style="margin-top:10px" src="${URL.createObjectURL(form.photo)}">`
   } else if (t.id === 'importfile' && t.files[0]) importData(t.files[0])
+  else if (t.id === 'daily') { S.settings.daily = kop('#daily'); saveSettings(); render() }
+  else if (t.id === 'own') { S.settings.own = kop('#own'); saveSettings(); render() }
   else if (t.id === 'limit') { S.settings.limit = Math.max(0, parseInt(t.value, 10) || 0); saveSettings(); toast('Ліміт збережено') }
   else if (t.dataset && t.dataset.act === 'openadd') { S.settings.openAdd = t.checked; saveSettings() }
   else if (t.dataset && t.dataset.act === 'acc') { S.settings.accounts[+t.dataset.i].on = t.checked; saveSettings() }
@@ -804,7 +891,7 @@ document.addEventListener('touchend', (e) => {
   if (btn && !btn.disabled) btn.click()
 }, { passive: true })
 document.addEventListener('keydown', (e) => { if (e.key !== 'Enter' || e.target.tagName !== 'INPUT') return
-  if (form) saveForm(); else if (dform) (dform.op ? saveDebtOp() : saveDebt()) })
+  if (form) saveForm(); else if (pform) savePlan(); else if (dform) (dform.op ? saveDebtOp() : saveDebt()) })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(false) })
 
 // ---------- старт ----------
