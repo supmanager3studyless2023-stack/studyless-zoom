@@ -260,6 +260,9 @@ function viewSettings() {
       <input class="field" id="token" type="password" placeholder="Токен Monobank" value="${esc(s.token)}" autocomplete="off">
       <button class="btn" data-act="savetoken">${s.token ? 'Зберегти й оновити' : 'Підключити'}</button>
       ${accs ? `<div style="margin-top:10px">${accs}</div>` : ''}
+      ${s.token ? `<div style="margin-top:14px"><p style="margin-bottom:8px">Завантажити старіші операції (наприклад, для порівняння місяців):</p>
+        <select class="field" id="histmonths">${[1, 2, 3, 5, 11].map((n) => { const d = new Date(new Date().getFullYear(), new Date().getMonth() - n, 1); return `<option value="${n}">З 1 ${GEN[d.getMonth()]} ${d.getFullYear()}</option>` }).join('')}</select>
+        <button class="btn sec" data-act="history">Завантажити історію</button><div class="sync" id="syncmsg">${esc(S.syncMsg)}</div></div>` : ''}
       ${s.token ? '<button class="btn del" data-act="disconnect">Відключити банк</button>' : ''}</div>
     <h3>Швидке додавання</h3><div class="box"><label class="tog" style="padding:0"><span>Після відкриття одразу форма нової витрати</span><input type="checkbox" data-act="openadd" ${s.openAdd ? 'checked' : ''}></label></div>
     <h3>Мої категорії</h3><div class="box">
@@ -438,7 +441,12 @@ async function mono(path) {
   if (!r.ok) throw new Error('http' + r.status)
   return r.json()
 }
-function setMsg(m) { S.syncMsg = m; if (S.tab === 'home' && !form) render() }
+function setMsg(m) {
+  S.syncMsg = m
+  const el = $('#syncmsg')
+  if (el) el.textContent = m
+  else if (S.tab === 'home' && !form) render()
+}
 
 async function loadAccounts() {
   const info = await mono('/personal/client-info')
@@ -465,47 +473,88 @@ function applyDebtPayment(t) {
   saveDebts()
   return true
 }
+// Monobank: не частіше 1 запиту виписки на хвилину, вікно виписки — до 31 дня
+let lastStmt = 0
+async function stmt(path) {
+  for (let tries = 0; ; tries++) {
+    const wait = lastStmt + 61000 - Date.now()
+    if (wait > 0) for (let s = Math.ceil(wait / 1000); s > 0; s--) { setMsg(`${S.progress} · чекаю ${s} с (ліміт банку: 1 запит/хв)`); await sleep(1000) }
+    setMsg(S.progress)
+    lastStmt = Date.now()
+    try { return await mono(path) } catch (e) { if (e.message === 'rate' && tries < 2) continue; throw e }
+  }
+}
+async function fetchWindow(a, from, to, autoDebt) {
+  let added = 0, autoPaid = 0
+  for (;;) {
+    const items = await stmt(`/personal/statement/${a.id}/${from}/${to}`)
+    for (const it of items) {
+      const id = 'mono:' + it.id
+      if (S.txs.some((x) => x.id === id)) continue
+      const rule = S.settings.rules[normDesc(it.description)]
+      const t = {
+        id, acc: a.id, ts: it.time * 1000, amount: it.amount, src: 'mono', desc: it.description || '', note: it.comment || '',
+        mcc: it.mcc, cat: it.amount > 0 ? 'income' : rule || mccToCat(it.mcc),
+      }
+      await dbPut(t); S.txs.push(t); added++
+      if (autoDebt && applyDebtPayment(t)) autoPaid++
+    }
+    if (items.length < 500) break
+    to = items[items.length - 1].time
+  }
+  return { added, autoPaid }
+}
+const bankError = (e) => e.message === 'rate' ? 'Забагато запитів до банку, спробуй за хвилину'
+  : e.message === 'token' ? 'Токен не підійшов — перевір у налаштуваннях' : 'Не вдалося зв’язатись з банком'
+
 async function sync(force) {
   if (S.syncing || !S.settings.token) return
   if (!force && Date.now() - S.settings.lastSync < 5 * 60000) return
-  S.syncing = true; setMsg('Оновлення…')
+  S.syncing = true; S.progress = 'Оновлення…'; setMsg(S.progress)
   try {
     if (!S.settings.accounts.length) { await loadAccounts(); await sleep(1000) }
-    const accs = S.settings.accounts.filter((a) => a.on)
-    let added = 0, autoPaid = 0, first = true
-    for (const a of accs) {
-      let to = Math.floor(Date.now() / 1000)
+    let added = 0, autoPaid = 0
+    for (const a of S.settings.accounts.filter((a) => a.on)) {
+      const to = Math.floor(Date.now() / 1000)
       const from = Math.max((S.settings.since[a.id] || 0) - 3600, to - 31 * 86400)
-      const newest = to
-      for (;;) {
-        if (!first) { for (let s = 61; s > 0; s--) { setMsg(`Monobank дозволяє 1 запит/хв, чекаю ${s} с…`); await sleep(1000) } }
-        first = false
-        setMsg('Оновлення…')
-        const items = await mono(`/personal/statement/${a.id}/${from}/${to}`)
-        for (const it of items) {
-          const id = 'mono:' + it.id
-          if (S.txs.some((x) => x.id === id)) continue
-          const rule = S.settings.rules[normDesc(it.description)]
-          const t = {
-            id, acc: a.id, ts: it.time * 1000, amount: it.amount, src: 'mono', desc: it.description || '', note: it.comment || '',
-            mcc: it.mcc, cat: it.amount > 0 ? 'income' : rule || mccToCat(it.mcc),
-          }
-          await dbPut(t); S.txs.push(t); added++
-          if (applyDebtPayment(t)) autoPaid++
-        }
-        if (items.length < 500) break
-        to = items[items.length - 1].time
-      }
-      S.settings.since[a.id] = newest
+      const r = await fetchWindow(a, from, to, true)
+      added += r.added; autoPaid += r.autoPaid
+      S.settings.since[a.id] = to
       saveSettings()
     }
     S.settings.lastSync = Date.now(); saveSettings()
     S.syncMsg = ''
     if (added) toast(`Нових операцій: ${added}${autoPaid ? `, автосписання боргу: ${autoPaid}` : ''}`)
-  } catch (e) {
-    S.syncMsg = e.message === 'rate' ? 'Забагато запитів до банку, спробуй за хвилину'
-      : e.message === 'token' ? 'Токен не підійшов — перевір у налаштуваннях' : 'Не вдалося зв’язатись з банком'
-  }
+  } catch (e) { S.syncMsg = bankError(e) }
+  S.syncing = false; render()
+}
+
+// Завантаження старішої історії: іде назад вікнами по 31 день, доки не дійде до початку обраного місяця
+const GEN = ['січня', 'лютого', 'березня', 'квітня', 'травня', 'червня', 'липня', 'серпня', 'вересня', 'жовтня', 'листопада', 'грудня']
+const histTarget = (n) => { const d = new Date(); return Math.floor(new Date(d.getFullYear(), d.getMonth() - n, 1).getTime() / 1000) }
+async function loadHistory(n) {
+  if (S.syncing || !S.settings.token) return
+  const target = histTarget(n)
+  const accs = S.settings.accounts.filter((a) => a.on)
+  const steps = Math.max(1, accs.length) * Math.ceil((Date.now() / 1000 - target) / (31 * 86400))
+  if (!confirm(`Завантаження займе близько ${steps} хв (банк дозволяє 1 запит на хвилину). Тримай застосунок відкритим. Почати?`)) return
+  S.syncing = true; S.progress = 'Історія'; setMsg('Історія…')
+  let added = 0
+  try {
+    if (!S.settings.accounts.length) await loadAccounts()
+    for (const a of S.settings.accounts.filter((a) => a.on)) {
+      const mine = S.txs.filter((t) => t.acc === a.id).map((t) => t.ts)
+      let to = mine.length ? Math.floor(Math.min(...mine) / 1000) + 3600 : Math.floor(Date.now() / 1000)
+      while (to > target) {
+        const from = Math.max(to - 31 * 86400, target)
+        S.progress = `Історія ${new Date(from * 1000).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })} – ${new Date(to * 1000).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short' })}`
+        added += (await fetchWindow(a, from, to, false)).added // борги за старими платежами не чіпаємо
+        to = from
+      }
+    }
+    S.syncMsg = ''
+    toast(`Історію завантажено: +${added}`)
+  } catch (e) { S.syncMsg = bankError(e) + (added ? ` (додано ${added})` : '') }
   S.syncing = false; render()
 }
 
@@ -573,6 +622,7 @@ document.addEventListener('click', async (e) => {
     case 'catback': S.statCat = null; render(); window.scrollTo(0, S.statScroll); break
     case 'kind': S.kind = v; render(); break
     case 'sync': sync(true); break
+    case 'history': loadHistory(+$('#histmonths').value); break
     case 'ftype': form.expense = v === 'e'; document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.v === v)); break
     case 'fcat': form.t.cat = v; document.querySelectorAll('.grid button').forEach((b) => b.classList.toggle('on', b.dataset.v === v)); break
     case 'fphoto': $('#photofile').click(); break
