@@ -6,6 +6,11 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '50mb',
     },
   },
+  async rewrites() {
+    return [
+      { source: '/money', destination: '/money/index.html' },
+    ]
+  },
   async redirects() {
     return [
       { source: '/', destination: '/combined', permanent: false },
