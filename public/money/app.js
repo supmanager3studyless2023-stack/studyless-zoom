@@ -369,26 +369,37 @@ function forecast() {
   const today = new Date(); today.setHours(0, 0, 0, 0)
   const plans = S.settings.plans.filter((p) => p.date && new Date(p.date + 'T00:00:00') >= today)
   if (!plans.length) return null
-  const free = S.debts.filter((d) => d.kind === 'credit').reduce((s, d) => s + Math.max(0, d.total - d.balance), 0) + S.settings.own
+  const lines = S.debts.filter((d) => d.kind === 'credit' && !d.hold)
+  const free = lines.reduce((s, d) => s + Math.max(0, d.total - d.balance), 0) + S.settings.own
   const daily = S.settings.daily || autoDaily()
   const last = Math.max(...plans.map((p) => new Date(p.date + 'T00:00:00')))
   const horizon = Math.min(120, Math.round((last - today) / 864e5))
   const insts = S.debts.filter((d) => d.kind === 'installment' && d.balance > 0 && d.day).map((d) => ({ ...d, rem: d.balance }))
   let pos = free, fixed = 0, firstNeg = null, low = { pos: free, ts: today.getTime() }
-  const ins = [], hasIn = new Set()
+  const ins = [], hasIn = new Set(), events = []
   for (let i = 1; i <= horizon; i++) {
     const day = new Date(today.getTime() + i * 864e5), key = dayKey(day.getTime())
     pos -= daily
     for (const d of insts) if (d.rem > 0 && day.getDate() === Math.min(d.day, new Date(day.getFullYear(), day.getMonth() + 1, 0).getDate())) {
-      const pay = Math.min(d.monthly, d.rem); d.rem -= pay; pos -= pay; fixed += pay
+      const pay = Math.min(d.monthly, d.rem); d.rem -= pay; pos -= pay; fixed += pay; events.push({ ts: day.getTime(), amt: pay })
     }
     for (const p of plans.filter((x) => x.date === key)) {
-      if (p.kind === 'out') { pos -= p.amount; fixed += p.amount } else {
-        ins.push({ p, days: i, before: pos, safeDaily: hasIn.size ? null : Math.max(0, free - fixed) / i }); hasIn.add(p.id); pos += p.amount
+      if (p.kind === 'out') { pos -= p.amount; fixed += p.amount; events.push({ ts: day.getTime(), amt: p.amount }) } else {
+        ins.push({ p, ts: day.getTime(), days: i, before: pos, safeDaily: hasIn.size ? null : Math.max(0, free - fixed) / i }); hasIn.add(p.id); pos += p.amount
       }
     }
     if (pos < 0 && !firstNeg) firstNeg = { ts: day.getTime(), days: i }
     if (pos < low.pos) low = { pos, ts: day.getTime() }
+  }
+  // розподіл кожної виплати: фіксовані платежі до наступної виплати -> гасіння боргу до бажаного максимуму -> решта на життя
+  const limit = lines.reduce((s, d) => s + d.total, 0), target = lines.reduce((s, d) => s + (d.target || 0), 0)
+  for (let k = 0; k < ins.length; k++) {
+    const x = ins[k], nextTs = ins[k + 1] ? ins[k + 1].ts : x.ts + 30 * 864e5
+    const reserve = events.filter((e) => e.ts >= x.ts && e.ts < nextTs).reduce((s, e) => s + e.amt, 0)
+    const used = Math.max(0, limit - x.before)
+    const repay = target > 0 ? Math.min(Math.max(0, used - target), Math.max(0, x.p.amount - reserve)) : 0
+    const living = Math.max(0, x.p.amount - reserve - repay)
+    x.alloc = { reserve, repay, living, perDay: living / Math.max(1, Math.round((nextTs - x.ts) / 864e5)), used, target }
   }
   return { free, daily, firstNeg, ins, end: pos, last, low }
 }
@@ -405,10 +416,14 @@ function forecastHtml() {
     return `<div class="sub"><span>${esc(x.p.name)} · ${dateStr(new Date(x.p.date + 'T12:00:00'))} · +${uah(x.p.amount)}</span><span style="color:${gap ? 'var(--danger)' : 'var(--accent)'}">${gap ? 'бракує ' + uah(x.before) : 'запас ' + uah(x.before)}</span></div>`
   }).join('')
   const gapLine = f.low.pos < 0 ? `<div class="sub"><span>Найбільший розрив (стільки треба знайти додатково)</span><b style="color:var(--danger)">−${uah(f.low.pos)} · ${dateStr(f.low.ts)}</b></div>` : ''
+  const allocHtml = f.ins.map((x) => x.alloc && `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)"><b>${esc(x.p.name)} · +${uah(x.p.amount)}</b>
+    <div class="sub"><span>Платежі до наступної виплати (розстрочка, разові)</span><span>${uah(x.alloc.reserve)}</span></div>
+    ${x.alloc.target ? `<div class="sub"><span>Погасити кредит (борг ${uah(x.alloc.used)} → ${uah(x.alloc.target)})</span><span>${uah(x.alloc.repay)}</span></div>` : ''}
+    <div class="sub"><span>Лишається на життя</span><b>${uah(x.alloc.living)} ≈ ${uah(x.alloc.perDay)}/день</b></div></div>`).join('')
   const safe = f.ins[0] && f.ins[0].safeDaily != null ? `<div class="sub"><span>Щоб дотягнути до першої виплати без мінуса</span><b>≈ ${uah(f.ins[0].safeDaily)}/день</b></div>` : ''
   return `<div class="box" style="margin-bottom:12px"><b>Прогноз до надходжень</b>
     <div class="sub"><span>Зараз доступно (вільний кредит + свої)</span><span>${uah(f.free)}</span></div>
-    <div style="margin-top:8px">${head}</div><div style="margin-top:6px">${rows}</div>${gapLine}${safe}${controls}
+    <div style="margin-top:8px">${head}</div><div style="margin-top:6px">${rows}</div>${gapLine}${safe}${allocHtml}${controls}
     <p style="margin:10px 0 0;font-size:13px">Рахується з урахуванням платежів за розстрочку й твоїх витрат на день.</p></div>`
 }
 function plansHtml() {
@@ -478,7 +493,9 @@ function openDebtSheet(d) {
     <div class="two" id="dinst" style="${inst ? '' : 'display:none'}"><input class="field" id="dmonthly" inputmode="decimal" placeholder="Щомісячний платіж" value="${x.monthly ? x.monthly / 100 : ''}">
       <input class="field" id="dday" inputmode="numeric" placeholder="День платежу (1–31)" value="${x.day || ''}"></div>
     <div id="dcredit" style="${inst ? 'display:none' : ''}"><select class="field" id="dacc"><option value="">Картка з кредитним лімітом (необов’язково)</option>${S.settings.accounts.map((a) => `<option value="${esc(a.id)}" ${x.acc === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select>
-      <p style="color:var(--muted);font-size:13px;margin:-4px 4px 10px">Якщо обрати картку, то переказ на неї з іншої твоєї картки сам зменшить борг.</p></div>
+      <p style="color:var(--muted);font-size:13px;margin:-4px 4px 10px">Якщо обрати картку, то переказ на неї з іншої твоєї картки сам зменшить борг.</p>
+      <input class="field" id="dtarget" inputmode="decimal" placeholder="Бажаний максимум боргу (напр. 5000)" value="${x.target ? x.target / 100 : ''}">
+      <label class="tog" style="padding:0 0 10px"><span>Поки не гасити й не використовувати</span><input type="checkbox" id="dhold" ${x.hold ? 'checked' : ''}></label></div>
     <div id="dinst2" style="${inst ? '' : 'display:none'}"><input class="field" id="dkey" placeholder="Як платіж називається в банку (для автосписання)" value="${esc(x.key || '')}">
       <p style="color:var(--muted);font-size:13px;margin:-4px 4px 10px">Напр. назва магазину з виписки Monobank. Тоді нові платежі з цією назвою самі зменшать борг.</p></div>
     <button class="btn" data-act="dsave">Зберегти</button>
@@ -501,7 +518,7 @@ function saveDebt() {
   if (!x.name || x.total <= 0) { toast('Введи назву і суму'); return }
   const bal = $('#dbal').value.trim()
   x.balance = bal === '' ? (dform.isNew ? x.total : x.balance) : kop('#dbal')
-  if (x.kind === 'installment') { x.key = $('#dkey').value.trim(); x.monthly = kop('#dmonthly'); x.day = Math.min(31, Math.max(0, parseInt($('#dday').value, 10) || 0)); x.acc = '' } else { x.monthly = 0; x.day = 0; x.acc = $('#dacc').value }
+  if (x.kind === 'installment') { x.key = $('#dkey').value.trim(); x.monthly = kop('#dmonthly'); x.day = Math.min(31, Math.max(0, parseInt($('#dday').value, 10) || 0)); x.acc = '' } else { x.monthly = 0; x.day = 0; x.acc = $('#dacc').value; x.target = kop('#dtarget'); x.hold = $('#dhold').checked }
   const i = S.debts.findIndex((o) => o.id === x.id)
   if (i >= 0) S.debts[i] = x; else S.debts.push(x)
   saveDebts(); closeSheet(); render()
