@@ -69,7 +69,7 @@ const S = {
   statCat: null,
   statScroll: 0,
   q: '',
-  settings: Object.assign({ token: '', limit: 0, accounts: [], since: {}, lastSync: 0, rules: {}, customCats: [], v: 1 }, LS.get('settings', {})),
+  settings: Object.assign({ token: '', limit: 0, accounts: [], since: {}, lastSync: 0, rules: {}, customCats: [], v: 1, lastBackup: 0, snooze: 0 }, LS.get('settings', {})),
   debts: LS.get('debts', []),
   syncing: false,
   syncMsg: '',
@@ -143,9 +143,16 @@ function viewHome() {
     <div class="hero"><div class="lbl">Витрачено${isCur ? ` · сьогодні ${uah(today)}` : ''}</div><div class="big">${uah(spent)}</div>${limitHtml}
     <div class="two" style="margin-top:14px"><div><div class="lbl">Надходження</div><div class="mini in">+${uah(income)}</div></div>
       <div><div class="lbl">Баланс місяця</div><div class="mini ${income - spent < 0 ? 'neg' : 'in'}">${income - spent < 0 ? '−' : '+'}${uah(income - spent)}</div></div></div></div>
+    ${backupBanner()}
     <div class="seg">${[['all', 'Усі'], ['out', 'Витрати'], ['in', 'Надходження']].map(([k, n]) => `<button data-act="kind" data-v="${k}" class="${S.kind === k ? 'on' : ''}">${n}</button>`).join('')}</div>
     <input class="field" id="search" type="search" placeholder="🔍 Пошук за назвою, категорією чи сумою" value="${esc(S.q)}">
     <div id="txlist">${homeList()}</div>${S.settings.token ? `<div class="sync">${esc(S.syncMsg) || syncedLabel()} · <button data-act="sync" style="text-decoration:underline">оновити</button></div>` : ''}`
+}
+function backupBanner() {
+  const s = S.settings, day = 864e5
+  if (S.txs.length + S.debts.length < 5 || Date.now() - s.lastBackup < 14 * day || Date.now() - s.snooze < 3 * day) return ''
+  return `<div class="box" style="margin-bottom:12px"><p style="margin:0 0 10px">Твої записи зберігаються лише на цьому телефоні. Збережи копію, щоб нічого не втратити.</p>
+    <div class="two"><button class="btn" data-act="export" style="margin:0">Зберегти копію</button><button class="btn sec" data-act="snooze" style="margin:0">Пізніше</button></div></div>`
 }
 function dayGroups(list, kind) {
   const groups = []
@@ -234,7 +241,7 @@ function viewSettings() {
       ${s.customCats.map((c) => `<div class="tog"><span>${esc(c.ico)} ${esc(c.name)}</span><button data-act="delcat" data-v="${esc(c.id)}" style="color:var(--danger)">Видалити</button></div>`).join('')}
       <div class="two" style="grid-template-columns:70px 1fr;margin-top:${s.customCats.length ? 10 : 0}px"><input class="field" id="cico" placeholder="🏷️" style="margin:0;text-align:center"><input class="field" id="cname" placeholder="Назва нової категорії" style="margin:0"></div>
       <button class="btn sec" data-act="addcat" style="margin-top:10px">Додати категорію</button></div>
-    <h3>Дані</h3><div class="box"><p>Дані лише на телефоні. Раз на кілька тижнів зберігай копію — якщо видалити застосунок або почистити Safari, дані зникнуть.</p>
+    <h3>Дані</h3><div class="box"><p>${s.lastBackup ? 'Остання копія: ' + new Date(s.lastBackup).toLocaleDateString('uk-UA', { day: 'numeric', month: 'long' }) + '. ' : ''}Дані лише на телефоні. Раз на кілька тижнів зберігай копію — якщо видалити застосунок або почистити Safari, дані зникнуть.</p>
       <button class="btn sec" data-act="export">Зберегти копію</button>
       <button class="btn sec" data-act="import">Відновити з копії</button>
       <input type="file" id="importfile" accept="application/json" hidden></div>
@@ -471,15 +478,19 @@ async function exportData() {
   for (const t of S.txs) txs.push({ ...t, photo: t.photo ? await blobToData(t.photo) : undefined })
   const s = { ...S.settings, token: '' }
   const file = new File([JSON.stringify({ v: 1, txs, settings: s, debts: S.debts })], `hroshi-${dayKey(Date.now())}.json`, { type: 'application/json' })
-  if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file] }); return } catch { return } }
+  if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file] }); markBackup(); return } catch { return } }
   const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = file.name; a.click()
+  markBackup()
 }
+function markBackup() { S.settings.lastBackup = Date.now(); saveSettings(); render(); toast('Копію збережено') }
 async function importData(file) {
   try {
     const d = JSON.parse(await file.text())
     if (!Array.isArray(d.txs)) throw new Error()
+    let skipped = 0
     for (const t of d.txs) {
       if (typeof t.photo === 'string') t.photo = await (await fetch(t.photo)).blob()
+      if (S.txs.some((x) => x.id === t.id)) { skipped++; continue } // наявні записи (з твоїми правками) не перезаписуємо
       await dbPut(t)
     }
     S.txs = await dbAll()
@@ -489,8 +500,8 @@ async function importData(file) {
       S.settings = { ...S.settings, limit: d.settings.limit || S.settings.limit, rules: { ...S.settings.rules, ...d.settings.rules }, customCats: cc }
       saveSettings(); rebuildCats()
     }
-    if (Array.isArray(d.debts)) { S.debts = d.debts; saveDebts() }
-    toast(`Відновлено: ${d.txs.length}`); render()
+    if (Array.isArray(d.debts)) { S.debts = [...S.debts, ...d.debts.filter((x) => !S.debts.some((y) => y.id === x.id))]; saveDebts() }
+    toast(`Додано: ${d.txs.length - skipped}${skipped ? `, пропущено (вже є): ${skipped}` : ''}`); render()
   } catch { toast('Файл не підійшов') }
 }
 
@@ -554,6 +565,7 @@ document.addEventListener('click', async (e) => {
       }
       break
     case 'export': exportData(); break
+    case 'snooze': S.settings.snooze = Date.now(); saveSettings(); render(); break
     case 'import': $('#importfile').click(); break
   }
 })
@@ -585,6 +597,8 @@ document.addEventListener('keydown', (e) => { if (e.key !== 'Enter' || e.target.
 document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(false) })
 
 // ---------- старт ----------
+// ПРАВИЛО ОНОВЛЕНЬ: нові версії ніколи не видаляють і не перезаписують дані користувача (записи, правки категорій,
+// власні категорії, борги). Зміни формату — лише додавання полів із запасними значеннями.
 ;(async () => {
   try { db = await openDb(); S.txs = await dbAll() } catch { toast('Не вдалося відкрити сховище') }
   rebuildCats()
