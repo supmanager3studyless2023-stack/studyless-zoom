@@ -166,12 +166,16 @@ function reportHtml() {
     if (t.own) { if (t.amount > 0) m.own += t.amount } else if (t.ignore) m.ign += Math.abs(t.amount)
     else if (t.amount > 0) m.inc += t.amount; else m.spent -= t.amount
   }
+  let cum = 0
+  const cumBy = {}
+  for (const k of Object.keys(byMonth).sort()) { cum += byMonth[k].inc - byMonth[k].spent; cumBy[k] = cum }
   const months = Object.keys(byMonth).sort().reverse().map((k) => {
     const m = byMonth[k], diff = m.inc - m.spent
     return `<div class="box" style="margin-bottom:8px"><b style="text-transform:capitalize">${monthName(k)}</b>
       <div class="sub"><span>Надходження</span><span>+${uah(m.inc)}</span></div><div class="sub"><span>Витрати</span><span>−${uah(m.spent)}</span></div>
       <div class="sub"><span>Різниця</span><b style="color:${diff < 0 ? 'var(--danger)' : 'var(--accent)'}">${diff < 0 ? '−' : '+'}${uah(diff)}</b></div>
-      <div class="sub"><span>Перекази між своїми картками (не враховано)</span><span>${uah(m.own)}</span></div>
+      <div class="sub"><span>Накопичено з початку даних</span><b style="color:${cumBy[k] < 0 ? 'var(--danger)' : 'var(--accent)'}">${cumBy[k] < 0 ? '−' : '+'}${uah(cumBy[k])}</b></div>
+      <div class="sub"><span>Перекази між своїми картками та транзит (не враховано)</span><span>${uah(m.own)}</span></div>
       ${m.ign ? `<div class="sub"><span>Позначено «не враховувати»</span><span>${uah(m.ign)}</span></div>` : ''}<div class="sub"><span>Операцій</span><span>${m.n}</span></div></div>`
   }).join('')
   // покриття даних по картках
@@ -237,7 +241,7 @@ function rowHtml(t) {
   const title = t.note || t.desc || c.name
   return `<button class="row ${t.ignore || t.own ? 'ign' : ''}" data-act="edit" data-id="${esc(t.id)}">
     <div class="ico">${c.ico}</div>
-    <div class="mid"><div class="t">${esc(title)}</div><div class="s">${c.name} · ${t.src === 'mono' ? 'картка' : 'готівка'}${t.photo ? ' · 📎' : ''}${t.own ? ' · між своїми картками' : t.ignore ? ' · не враховано' : ''}</div></div>
+    <div class="mid"><div class="t">${esc(title)}</div><div class="s">${c.name} · ${t.src === 'mono' ? 'картка' : 'готівка'}${t.photo ? ' · 📎' : ''}${t.own === 'jar' ? ' · транзит зі скарбнички' : t.own ? ' · між своїми картками' : t.ignore ? ' · не враховано' : ''}</div></div>
     <div class="a ${t.amount > 0 ? 'in' : ''}">${t.amount > 0 ? '+' : '−'}${uah(t.amount)}</div></button>`
 }
 
@@ -554,11 +558,18 @@ async function markTransfers(cands, autoDebt) {
     if (t.own || t.src !== 'mono' || !t.acc) continue
     // сума збігається, або на боці відправника є комісія до 5% (напр., переказ з кредитної картки)
     const fee = (a, b) => a.amount < 0 && b.amount > 0 && Number(a.mcc) === 4829 && Number(b.mcc) === 4829 && -a.amount >= b.amount && -a.amount <= b.amount * 1.05 + 100
-    const m = pool.find((o) => o !== t && !o.own && o.acc !== t.acc && Math.abs(o.ts - t.ts) <= 5 * 60000 && (o.amount === -t.amount || fee(t, o) || fee(o, t)))
+    let m = pool.find((o) => o !== t && !o.own && o.acc !== t.acc && Math.abs(o.ts - t.ts) <= 5 * 60000 && (o.amount === -t.amount || fee(t, o) || fee(o, t)))
+    let kind = true
+    if (!m) { // гроші зі скарбнички (подарунки від колег), які одразу переказані далі
+      const jar = (a, b) => a.amount > 0 && /банки/i.test(a.desc || '') && b.amount < 0 && Number(b.mcc) === 4829 && !b.own && !/^(Переказ на картку|Поповнення)|nizhyn|545708/.test(b.desc || '')
+        && -b.amount >= a.amount && -b.amount <= a.amount * 1.05 + 100 && b.ts - a.ts >= -60000 && b.ts - a.ts <= 3 * 864e5
+      m = pool.find((o) => o !== t && !o.own && (jar(t, o) || jar(o, t)))
+      kind = 'jar'
+    }
     if (!m) continue
     for (const x of [t, m]) {
-      x.own = true; x.cat = 'transfer'
-      if (autoDebt && applyOwnTransfer(x)) repaid++
+      x.own = kind; x.cat = 'transfer'
+      if (autoDebt && kind === true && applyOwnTransfer(x)) repaid++
       await dbPut(x)
     }
     n++
